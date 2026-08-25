@@ -1,0 +1,33 @@
+# End-to-end pipeline: seed -> teacher API -> SFT JSONL -> student checkpoint.
+easydistill:
+  job_type: instruct_distill
+  backend:
+    type: openai
+    api_key: ${TEACHER_API_KEY:-EMPTY}
+    base_url: ${TEACHER_BASE_URL}
+    model_id: ${TEACHER_MODEL_ID}
+  generation:
+    system_prompt: "You are a helpful assistant."
+    temperature: 0.7
+    max_tokens: 1024
+    max_workers: 4
+    show_progress: true
+  dataset:
+    instruction_key: instruction
+    skip_empty: true
+    min_length: 10
+
+swift:
+  tuner_type: lora
+  lora_rank: 8
+  lora_alpha: 32
+  num_train_epochs: 3
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 1.0e-4
+  max_length: 2048
+  logging_steps: 5
+  save_steps: 200
+  save_total_limit: 2
+  torch_dtype: bfloat16
+  gradient_checkpointing: true

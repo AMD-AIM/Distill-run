@@ -1,0 +1,21 @@
+# ms-swift is installed separately with --no-deps to protect image Torch.
+accelerate>=1.14
+addict
+attrdict
+binpacking
+dacite
+datasets<4.8.5
+importlib-metadata
+json_repair
+matplotlib
+modelscope
+nltk
+peft>=0.19
+rouge
+sentencepiece
+simplejson
+sortedcontainers
+tensorboard
+tiktoken
+transformers>=5.0
+transformers-stream-generator

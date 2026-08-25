@@ -1,0 +1,40 @@
+# White-box: teacher and student weights in one process (TRL DistillationTrainer).
+# Keys under `trl` go straight into DistillationConfig.
+trl:
+  num_train_epochs: 1
+  # DistillationTrainer's generation dataloader is iterable, so a positive
+  # max_steps is required even when the source JSONL is finite.
+  max_steps: 100
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 1.0e-5
+  bf16: true
+  gradient_checkpointing: true
+  logging_steps: 1
+  save_steps: 200
+  save_total_limit: 2
+  max_completion_length: 256
+  temperature: 1.0
+  beta: 0.5
+
+lora:
+  enabled: true
+  r: 8
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+model_init:
+  torch_dtype: bfloat16
+  trust_remote_code: true
+
+teacher_model_init:
+  torch_dtype: bfloat16
+  trust_remote_code: true

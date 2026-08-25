@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+.venvs/
+venv/
+.distill/
+wheelhouse/
+
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# local run artifacts
+output/
+work/
+logs/
+*.local.yaml
+.env

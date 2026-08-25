@@ -1,0 +1,8 @@
+# Runtime dependencies for the pinned TRL submodule. Torch comes from the image.
+accelerate>=1.14
+datasets>=4.7
+deepspeed>=0.19
+jinja2
+packaging>20
+peft>=0.19
+transformers>=5.0

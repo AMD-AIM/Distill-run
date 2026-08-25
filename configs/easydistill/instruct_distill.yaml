@@ -1,0 +1,24 @@
+# Black-box stage one: seed instructions -> teacher API -> SFT JSONL.
+# distill-run overwrites dataset.input_path with the resolved local path and
+# dataset.output_path with --output, so leave those to the CLI in production.
+job_type: instruct_distill
+
+backend:
+  type: openai
+  api_key: ${TEACHER_API_KEY:-EMPTY}
+  base_url: ${TEACHER_BASE_URL}
+  model_id: ${TEACHER_MODEL_ID}
+
+generation:
+  system_prompt: "You are a helpful assistant."
+  temperature: 0.7
+  max_tokens: 512
+  max_workers: 4
+  show_progress: true
+
+dataset:
+  input_path: /data/seed/instructions.jsonl
+  output_path: /data/sft/sft.jsonl
+  instruction_key: instruction
+  skip_empty: true
+  min_length: 10

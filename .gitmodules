@@ -1,0 +1,6 @@
+[submodule "third_party/trl"]
+	path = third_party/trl
+	url = https://gh.monlor.com/https://github.com/huggingface/trl.git
+[submodule "third_party/easydistill"]
+	path = third_party/easydistill
+	url = https://gh.monlor.com/https://github.com/modelscope/easydistill

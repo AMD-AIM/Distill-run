@@ -1,0 +1,35 @@
+# Smallest combined EasyDistill + Swift run; not a training recipe.
+easydistill:
+  job_type: instruct_distill
+  backend:
+    type: openai
+    api_key: ${TEACHER_API_KEY:-EMPTY}
+    base_url: ${TEACHER_BASE_URL}
+    model_id: ${TEACHER_MODEL_ID}
+  generation:
+    system_prompt: "You are a helpful assistant."
+    temperature: 0.7
+    max_tokens: 256
+    max_workers: 4
+    show_progress: true
+  dataset:
+    instruction_key: instruction
+    skip_empty: true
+    min_length: 1
+
+swift:
+  tuner_type: lora
+  lora_rank: 8
+  lora_alpha: 32
+  max_steps: 3
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-4
+  max_length: 1024
+  logging_steps: 1
+  save_steps: 3
+  save_total_limit: 1
+  torch_dtype: bfloat16
+  gradient_checkpointing: true
+  dataloader_num_workers: 0

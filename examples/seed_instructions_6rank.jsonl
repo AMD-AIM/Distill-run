@@ -1,0 +1,18 @@
+{"instruction": "用一句话解释什么是知识蒸馏。"}
+{"instruction": "列出三种降低大模型推理显存占用的方法。"}
+{"instruction": "写一个 Python 函数，判断字符串是否为回文。"}
+{"instruction": "解释 LoRA 与全参数微调的区别。"}
+{"instruction": "把下面这句话翻译成英文：模型在验证集上过拟合了。"}
+{"instruction": "说明白盒蒸馏与黑盒蒸馏的主要区别。"}
+{"instruction": "解释 soft targets 为什么能帮助小模型学习。"}
+{"instruction": "给出一个梯度累积的简单使用场景。"}
+{"instruction": "什么是混合精度训练？"}
+{"instruction": "简述数据并行和模型并行的差别。"}
+{"instruction": "写一个 Python 函数计算整数列表的平均值。"}
+{"instruction": "解释训练中的 checkpoint 有什么用途。"}
+{"instruction": "为什么训练集和验证集需要分开？"}
+{"instruction": "用两句话介绍 Transformer 的注意力机制。"}
+{"instruction": "列出两种避免神经网络过拟合的方法。"}
+{"instruction": "解释 batch size 对训练的影响。"}
+{"instruction": "什么是学习率预热？"}
+{"instruction": "说明模型量化的基本目标。"}

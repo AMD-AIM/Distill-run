@@ -1,0 +1,5 @@
+{"instruction": "用一句话解释什么是知识蒸馏。"}
+{"instruction": "列出三种降低大模型推理显存占用的方法。"}
+{"instruction": "写一个 Python 函数，判断字符串是否为回文。"}
+{"instruction": "解释 LoRA 与全参数微调的区别。"}
+{"instruction": "把下面这句话翻译成英文：模型在验证集上过拟合了。"}

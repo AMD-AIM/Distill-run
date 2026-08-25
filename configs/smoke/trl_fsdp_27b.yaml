@@ -1,0 +1,39 @@
+# Two-step acceptance run for the formal white-box path:
+# Qwen3.8-27B teacher weights -> vocabulary-compatible Qwen3.5-0.8B LoRA student.
+trl:
+  max_steps: 2
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-5
+  bf16: true
+  gradient_checkpointing: true
+  logging_steps: 1
+  save_steps: 2
+  save_total_limit: 1
+  max_completion_length: 64
+  temperature: 1.0
+  beta: 0.5
+  report_to: none
+  dataloader_num_workers: 0
+
+lora:
+  enabled: true
+  r: 8
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+model_init:
+  torch_dtype: bfloat16
+  trust_remote_code: true
+
+teacher_model_init:
+  torch_dtype: bfloat16
+  trust_remote_code: true

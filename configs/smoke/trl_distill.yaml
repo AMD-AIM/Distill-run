@@ -1,0 +1,30 @@
+# Minimal white-box run: load both models, take a few steps, save an adapter.
+# Not a meaningful training recipe.
+trl:
+  max_steps: 2
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1
+  learning_rate: 1.0e-5
+  bf16: true
+  gradient_checkpointing: true
+  logging_steps: 1
+  save_steps: 2
+  save_total_limit: 1
+  max_completion_length: 64
+  temperature: 1.0
+  beta: 0.5
+
+lora:
+  enabled: true
+  r: 8
+  lora_alpha: 32
+  lora_dropout: 0.05
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
