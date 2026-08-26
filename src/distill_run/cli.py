@@ -49,6 +49,24 @@ def _env_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _reject_multi_gpu(args: argparse.Namespace) -> None:
+    requested = (
+        args.num_processes,
+        os.environ.get("NPROC_PER_NODE"),
+        os.environ.get("WORLD_SIZE"),
+    )
+    for value in requested:
+        try:
+            if value is not None and int(value) > 1:
+                raise UsageError(
+                    "single-machine multi-GPU commands are temporarily disabled because "
+                    "the isolated engine environments are not fully adapted; "
+                    "use --num-processes 1"
+                )
+        except ValueError:
+            continue
+
+
 def configure_logging(level: str | None = None) -> None:
     """Log through our own logger, line-buffered, ignoring the root logger.
 
@@ -125,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             print(yaml.safe_dump(engine_defaults(engine_name), allow_unicode=True, sort_keys=False))
             return int(ExitCode.OK)
+        _reject_multi_gpu(args)
         engine_name = args.engine or os.environ.get("DISTILL_ENGINE")
         if engine_name:
             relaunched = maybe_run_in_engine_environment(engine_name, raw_argv)

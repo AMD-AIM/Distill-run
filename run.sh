@@ -111,23 +111,11 @@ case "$CMD" in
     ;;
 
   trl-fsdp)
-    id="$(run_id)"
-    in_container_distributed configs/accelerate/fsdp2.yaml --engine trl \
-      --distributed-strategy fsdp2 \
-      --config "${CONFIG:-configs/trl/trl_distill.yaml}" \
-      --data "${DATASET:-examples/seed_instructions.jsonl}" \
-      --output "$OUTPUT_DIR/trl-fsdp-$id" \
-      --run-id "$id" "$@"
+    die "single-machine multi-GPU is temporarily unavailable; use './run.sh trl'"
     ;;
 
   trl-zero3)
-    id="$(run_id)"
-    in_container_distributed configs/accelerate/deepspeed_zero3.yaml --engine trl \
-      --distributed-strategy zero3 \
-      --config "${CONFIG:-configs/trl/trl_distill.yaml}" \
-      --data "${DATASET:-examples/seed_instructions.jsonl}" \
-      --output "$OUTPUT_DIR/trl-zero3-$id" \
-      --run-id "$id" "$@"
+    die "single-machine multi-GPU is temporarily unavailable; use './run.sh trl'"
     ;;
 
   easydistill-swift)

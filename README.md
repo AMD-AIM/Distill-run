@@ -102,7 +102,11 @@ Run `distill-run --help` for the authoritative list. See
 defaults and compatibility tables, [`docs/datasets.md`](docs/datasets.md) for
 Hub/Parquet normalization, and `docs/engines.md` for engine behavior.
 
-Single-machine distribution is part of the CLI:
+> **Temporary limitation:** single-machine multi-GPU entrypoints are disabled
+> while isolated engine environments are being adapted. The underlying launcher
+> code and configs are retained; use `--num-processes 1`.
+
+Single-machine distribution support is retained in the codebase:
 
 Omitting `--num-processes` defaults to one process and exposes only logical GPU
 0 to the training framework. Use `--device N` to select another logical GPU.

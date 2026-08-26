@@ -168,3 +168,7 @@ def test_engine_catalog_lists_public_frameworks(capsys):
 def test_unknown_engine_points_to_the_engine_catalog():
     with pytest.raises(UsageError, match=r"distill-run --engines"):
         build_context({"engine": "unsupported"})
+
+
+def test_multi_gpu_command_is_temporarily_disabled():
+    assert main(["--engine", "swift", "--num-processes", "2"]) == ExitCode.USAGE

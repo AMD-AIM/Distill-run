@@ -32,7 +32,10 @@ def initialise_submodules() -> None:
     if not (ROOT / ".git").exists():
         return
     run(["git", "submodule", "sync", "--recursive"])
-    run(["git", "submodule", "update", "--init", "--recursive"])
+    # The pinned projects have long histories; a fresh install only needs the
+    # recorded commits. The mirror can fetch an older pinned commit separately
+    # when it is not at the current shallow tip.
+    run(["git", "submodule", "update", "--init", "--recursive", "--depth", "1"])
 
 
 def create_environment(path: Path, base_python: str) -> Path:
