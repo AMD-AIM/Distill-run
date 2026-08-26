@@ -54,6 +54,11 @@ class DatasetFetchError(DistillRunError):
     exit_code = ExitCode.DATASET_FETCH_FAILED
 
 
+class ModelFetchError(DistillRunError):
+    code = "ModelFetchFailed"
+    exit_code = ExitCode.DATASET_FETCH_FAILED
+
+
 class TeacherUnavailableError(DistillRunError):
     code = "TeacherDown"
     exit_code = ExitCode.TEACHER_UNAVAILABLE

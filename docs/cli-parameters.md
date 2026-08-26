@@ -31,6 +31,8 @@
 | `--set` | `key=value` | 无 | ✓ | ✓ | ✓ | ✓ | 覆盖未提升为一级参数的框架字段，可重复 |
 | `--run-id` | string | 时间戳 ID | ✓ | ✓ | ✓ | ✓ | 本次运行标识 |
 | `--work-dir` | path | `~/.cache/distill-run` | ✓ | ✓ | ✓ | ✓ | 缓存及中间文件目录 |
+| `--model-cache-dir` | path | `<work-dir>/models` | — | ✓ | ✓ | ✓ | Hub 模型的容器本地缓存 |
+| `--model-revision` | string | Hub 默认版本 | — | ✓ | ✓ | ✓ | Teacher/Student 模型 revision 或 commit |
 | `--dataset-cache-dir` | path | `<work-dir>/cache` | ✓ | ✓ | ✓ | ✓ | 网络数据集缓存目录 |
 | `--dataset-format` | string | `auto` | ✓ | ✓ | ✓ | ✓ | `auto`、`jsonl`、`json`、`parquet` 或 `arrow` |
 | `--dataset-revision` | string | Hub 默认版本 | ✓ | ✓ | ✓ | ✓ | 数据集 revision 或 commit |
@@ -105,8 +107,8 @@ TRL 同时接受教师生成参数表中的 `--temperature`。
 
 | 参数 | 类型 | 默认值 | E | S | T | ES | 说明 |
 | --- | --- | --- | :-: | :-: | :-: | :-: | --- |
-| `--student` / `--model` | path | 必填 | — | ✓ | ✓ | ✓ | Student 权重 |
-| `--teacher` | path | 必填 | — | — | ✓ | — | 白盒 Teacher 权重，不能是 URL |
+| `--student` / `--model` | URI/path | 必填 | — | ✓ | ✓ | ✓ | 本地、`hf://` 或 `ms://` Student 权重 |
+| `--teacher` | URI/path | 必填 | — | — | ✓ | — | 本地、`hf://` 或 `ms://` 白盒 Teacher 权重 |
 | `--dataset` / `--data` | URI/path | 必填或配置提供 | — | ✓ | ✓ | — | Swift SFT 数据或 TRL prompts |
 | `--resume` / `--no-resume` | bool | false | — | ✓ | ✓ | ✓ | 从输出目录最新 checkpoint 恢复 |
 | `--num-processes` / `--nproc-per-node` | int | `1` | — | ✓ | ✓ | ✓ | 单机训练进程/GPU 数 |

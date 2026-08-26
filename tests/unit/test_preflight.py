@@ -43,6 +43,7 @@ def make_ctx(engine: str, tmp_path: Path, args: dict, config: dict | None = None
         work_dir=tmp_path / "work",
         output=output,
         cache_dir=tmp_path / "cache",
+        model_cache_dir=tmp_path / "models",
         cancellation=Cancellation(),
     )
 

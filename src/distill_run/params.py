@@ -515,10 +515,25 @@ PARAMS: tuple[Param, ...] = (
     Param(
         flag="--work-dir",
         dest="work_dir",
-        help="Scratch directory for the dataset cache and intermediate files.",
+        help="Scratch directory for downloaded models, datasets and intermediate files.",
         kind="path",
         env="WORK_DIR",
         default=DEFAULT_WORK_DIR,
+    ),
+    Param(
+        flag="--model-cache-dir",
+        dest="model_cache_dir",
+        help="Where downloaded models are cached; defaults to <work-dir>/models.",
+        kind="path",
+        engines=TRAIN_ENGINES,
+        env="MODEL_CACHE_DIR",
+    ),
+    Param(
+        flag="--model-revision",
+        dest="model_revision",
+        help="Hub revision or commit used for downloaded teacher and student models.",
+        engines=TRAIN_ENGINES,
+        env="MODEL_REVISION",
     ),
     Param(
         flag="--resume",
@@ -658,7 +673,7 @@ PARAMS: tuple[Param, ...] = (
     Param(
         flag="--student",
         dest="student",
-        help="Student base weights path.",
+        help="Student weights: local path, hf://org/model or ms://org/model.",
         kind="path",
         engines=TRAIN_ENGINES,
         required=TRAIN_ENGINES,
@@ -668,7 +683,7 @@ PARAMS: tuple[Param, ...] = (
     Param(
         flag="--teacher",
         dest="teacher",
-        help="Teacher weights path for white-box distillation (never a URL).",
+        help="Teacher weights for TRL: local path, hf://org/model or ms://org/model.",
         kind="path",
         engines=("trl",),
         required=("trl",),

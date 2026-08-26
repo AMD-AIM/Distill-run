@@ -147,9 +147,9 @@ Failures are separated so a shell script can tell a typo from a dead teacher.
 ## How a run is put together
 
 ```text
-parse args ─► merge (args > env) ─► load config ─► preflight ─► resolve datasets ─► engine
-                                                   ▲                                  │
-                                          CPU-only, seconds                  the only expensive part
+parse args ─► merge ─► load config ─► resolve data/models ─► preflight ─► engine
+                                       container-local cache                    │
+                                                                    the expensive part
 ```
 
 Everything before the engine is cheap, which is the whole point: a wrong path, an
@@ -164,6 +164,15 @@ path, `https://…`, `hf://org/name` or `ms://org/name` all work, and network
 sources are cached under `<work-dir>/cache` keyed by URI and revision. Engines
 only ever see local paths.
 
+Model arguments work the same way for training engines: `--student` and TRL's
+`--teacher` accept a local path, `hf://org/model`, or `ms://org/model`. Hub
+weights are downloaded at runtime into `<work-dir>/models`; use
+`--model-cache-dir` and `--model-revision` to override that location or pin a
+revision. This allows a Kubernetes Pod to run without shared storage, but its
+datasets, weights, and checkpoints disappear when the Pod is deleted unless they
+are copied or uploaded first. The `/models`, `/data`, and `/output` path
+conventions remain available for deployments that can mount volumes.
+
 ```text
 src/distill_run/
   cli.py          entrypoint: parse, dispatch, single exit funnel
@@ -171,6 +180,7 @@ src/distill_run/
                   accepted sets are all derived from it
   config.py       YAML/JSON loading, ${ENV} expansion, value precedence
   dataset.py      URI → local path, with a content-addressed cache
+  models.py       local/Hub model URI → container-local checkpoint
   fetchers.py     one class per scheme: local, http, hf, modelscope
   preflight.py    cheap checks: writable dirs, disk, weights, teacher, arg names
   context.py      what an engine is allowed to know about the run

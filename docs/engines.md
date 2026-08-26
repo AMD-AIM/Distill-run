@@ -148,9 +148,11 @@ Teacher and student weights are loaded directly; the student learns from the
 teacher's logits. The student remains a complete Qwen model—LoRA only controls
 which student parameters are updated.
 
-`--teacher` is a **weights path**, never a URL. `--output` is a directory; the
-final adapter lands in `<output>/final`. Model, LoRA, distillation and distributed
-parameters are available as first-level CLI flags.
+`--teacher` and `--student` accept a local weights path, `hf://org/model`, or
+`ms://org/model`. Hub models are downloaded into `<work-dir>/models` before
+preflight. `--output` is a directory; the final adapter lands in
+`<output>/final`. Model, LoRA, distillation and distributed parameters are
+available as first-level CLI flags.
 
 In an optional config, keys under `trl:` go to `DistillationConfig`, and the LoRA
 section is separate. Names are checked against the installed

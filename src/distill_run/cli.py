@@ -36,6 +36,7 @@ from .defaults import engine_defaults
 from .engines import registry
 from .engines.base import Engine, RunResult
 from .errors import CancelledError, DistillRunError, ExitCode, UsageError, classify
+from .models import resolve_model_params
 from .runtime_env import maybe_run_in_engine_environment
 from .signals import install_handlers
 
@@ -189,8 +190,9 @@ def build_context(args: dict[str, Any]) -> RunContext:
     run_id = params.get("run_id") or generate_run_id()
     work_dir = Path(params.get("work_dir", P.DEFAULT_WORK_DIR))
     cache_dir = Path(params.get("dataset_cache_dir") or work_dir / "cache")
+    model_cache_dir = Path(params.get("model_cache_dir") or work_dir / "models")
     output = Path(params.get("output"))
-    prepare_environment(work_dir, cache_dir)
+    prepare_environment(work_dir, cache_dir, model_cache_dir)
 
     config_env = expansion_env(params, env)
     config = engine_defaults(engine_name)
@@ -211,6 +213,7 @@ def build_context(args: dict[str, Any]) -> RunContext:
         work_dir=work_dir,
         output=output,
         cache_dir=cache_dir,
+        model_cache_dir=model_cache_dir,
         cancellation=install_handlers(),
     )
 
@@ -223,10 +226,11 @@ def execute(ctx: RunContext) -> RunResult:
     preflight.check_space(ctx.output_dir)
 
     specs = engine.dataset_specs(ctx)
-    engine.preflight(ctx)
-
     for dest, spec in specs.items():
         ctx.datasets[dest] = resolve(spec, ctx.cache_dir)
+
+    resolve_model_params(ctx)
+    engine.preflight(ctx)
 
     if ctx.cancellation.requested:
         raise CancelledError("cancelled before the engine started")

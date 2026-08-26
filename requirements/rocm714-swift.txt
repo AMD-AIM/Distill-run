@@ -5,6 +5,7 @@ attrdict
 binpacking
 dacite
 datasets<4.8.5
+huggingface_hub>=0.23
 importlib-metadata
 json_repair
 matplotlib

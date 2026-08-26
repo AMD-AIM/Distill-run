@@ -2,7 +2,9 @@
 accelerate>=1.14
 datasets>=4.7
 deepspeed>=0.19
+huggingface_hub>=0.23
 jinja2
+modelscope
 packaging>20
 peft>=0.19
 transformers>=5.0

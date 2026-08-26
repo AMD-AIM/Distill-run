@@ -33,6 +33,7 @@ class RunContext:
     work_dir: Path
     output: Path
     cache_dir: Path
+    model_cache_dir: Path
     cancellation: Cancellation
     datasets: dict[str, ResolvedDataset] = field(default_factory=dict)
 
@@ -74,13 +75,13 @@ class RunContext:
         return replace(self, engine=engine, output=output, config=config, datasets={})
 
 
-def prepare_environment(work_dir: Path, cache_dir: Path) -> None:
+def prepare_environment(work_dir: Path, cache_dir: Path, model_cache_dir: Path) -> None:
     """Point framework caches at the scratch directory, not the container root."""
     os.environ.setdefault("HF_HOME", str(cache_dir / "hf"))
     os.environ.setdefault("HF_DATASETS_CACHE", str(cache_dir / "hf-datasets"))
     os.environ.setdefault("MODELSCOPE_CACHE", str(cache_dir / "modelscope"))
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    for path in (work_dir, cache_dir):
+    for path in (work_dir, cache_dir, model_cache_dir):
         try:
             ensure_dir(path)
         except OSError as exc:

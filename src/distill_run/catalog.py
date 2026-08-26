@@ -20,17 +20,17 @@ ENGINE_CATALOG: dict[str, dict[str, str]] = {
     "swift": {
         "framework": "ms-swift",
         "mode": "student SFT",
-        "input": "SFT dataset + local student weights",
+        "input": "SFT dataset + local or Hub student weights",
     },
     "trl": {
         "framework": "TRL DistillationTrainer",
         "mode": "white-box logits distillation",
-        "input": "prompt dataset + local teacher and student weights",
+        "input": "prompt dataset + local or Hub teacher and student weights",
     },
     "easydistill-swift": {
         "framework": "EasyDistill + ms-swift",
         "mode": "black-box generation followed by student SFT",
-        "input": "seed prompts + teacher API + local student weights",
+        "input": "seed prompts + teacher API + local or Hub student weights",
     },
     "noop": {
         "framework": "built-in",
@@ -105,6 +105,8 @@ def model_catalog() -> dict[str, Any]:
         "models": {
             "supported": [
                 "local Hugging Face Transformers causal-language-model checkpoints",
+                "Hugging Face Hub models via hf://org/model",
+                "ModelScope models via ms://org/model",
                 "OpenAI-compatible teacher model IDs for EasyDistill",
             ],
             "validated_families": ["Qwen3", "Qwen3.5"],
