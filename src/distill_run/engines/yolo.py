@@ -90,6 +90,9 @@ class YoloEngine(Engine):
         self._model = resolve_model(ctx)
 
     def run(self, ctx: RunContext) -> RunResult:
+        # MIOpen's default find mode spends ~30 s per new conv shape (each autobatch
+        # probe, the last partial batch, validation); FAST picks kernels heuristically.
+        os.environ.setdefault("MIOPEN_FIND_MODE", "FAST")
         import torch
 
         from ..yolo.model import DetectionModel

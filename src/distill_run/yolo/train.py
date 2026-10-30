@@ -359,19 +359,20 @@ class Trainer:
             if hasattr(loss_fn, "update"):
                 loss_fn.update()
 
-            final_metrics = (
+            metrics = (
                 evaluate(ema.ema, val_loader, device, cfg, self.data.nc, self.amp)
                 if cfg.val and stopped != "cancelled" else {}
             )
-            fitness = 0.1 * final_metrics.get("mAP50", 0) + 0.9 * final_metrics.get("mAP50-95", 0)
+            fitness = 0.1 * metrics.get("mAP50", 0) + 0.9 * metrics.get("mAP50-95", 0)
             box, cls_, dfl = mean_items.tolist()
             row = {"epoch": epoch + 1, "steps": global_step, "train/box": box, "train/cls": cls_,
-                   "train/dfl": dfl, **{f"val/{k}": v for k, v in final_metrics.items()},
+                   "train/dfl": dfl, **{f"val/{k}": v for k, v in metrics.items()},
                    "lr": optimizer.param_groups[1]["lr"], "time": time.time() - t_start}
             self._append_csv(results_csv, row)
-            if final_metrics:
+            if metrics:
+                final_metrics = metrics
                 logger.info("val epoch %d: %s", epoch + 1,
-                            " ".join(f"{k}={v:.4f}" for k, v in final_metrics.items()))
+                            " ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
             improved = fitness > best_fitness
             best_fitness = max(best_fitness, fitness)
             self._save(last, model, ema, optimizer, scaler, epoch, best_fitness, global_step)
