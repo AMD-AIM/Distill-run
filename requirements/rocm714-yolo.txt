@@ -1,0 +1,5 @@
+# Built-in YOLO engine. Torch and torchvision come from the image.
+numpy
+opencv-python-headless
+safetensors
+huggingface_hub>=0.23

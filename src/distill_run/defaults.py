@@ -83,11 +83,42 @@ EASYDISTILL_SWIFT = {
     **SWIFT,
 }
 
+YOLO = {
+    "yolo": {
+        "epochs": 100,
+        "imgsz": 640,
+        "batch": 16,
+        "workers": 8,
+        "pretrained": False,
+        "optimizer": "auto",
+        "lr0": 0.01,
+        "lrf": 0.01,
+        "momentum": 0.937,
+        "weight_decay": 0.0005,
+        "warmup_epochs": 3.0,
+        "box": 7.5,
+        "cls": 0.5,
+        "dfl": 1.5,
+        "amp": True,
+        "close_mosaic": 10,
+        "val": True,
+        "val_fraction": 0.0,
+        "hsv_h": 0.015,
+        "hsv_s": 0.7,
+        "hsv_v": 0.4,
+        "translate": 0.1,
+        "scale": 0.5,
+        "fliplr": 0.5,
+        "mosaic": 1.0,
+    }
+}
+
 _BY_ENGINE: dict[str, dict[str, Any]] = {
     "easydistill": EASYDISTILL,
     "swift": SWIFT,
     "trl": TRL,
     "easydistill-swift": EASYDISTILL_SWIFT,
+    "yolo": YOLO,
     "noop": {},
 }
 

@@ -6,7 +6,7 @@ cd "$(dirname "$0")" && source ./env.sh
 ./docker_ctl.sh start
 
 profile="${PROFILE:-rocm714}"
-engines="${ENGINES:-swift,trl,easydistill}"
+engines="${ENGINES:-swift,trl,easydistill,yolo}"
 say "creating isolated environments (profile=$profile, engines=$engines)"
 docker exec -i -w "$CONTAINER_WORKDIR" \
   -u "$HOST_UID:$HOST_GID" \

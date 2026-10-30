@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-ENGINES: tuple[str, ...] = ("easydistill", "swift", "trl", "easydistill-swift", "noop")
+ENGINES: tuple[str, ...] = ("easydistill", "swift", "trl", "easydistill-swift", "yolo", "noop")
 
 ParamKind = Literal["str", "int", "float", "bool", "path", "dataset", "csv"]
 
@@ -63,6 +63,8 @@ class Param:
 TEACHER_ENGINES = ("easydistill", "easydistill-swift")
 TRAIN_ENGINES = ("swift", "trl", "easydistill-swift")
 DISTRIBUTED_ENGINES = ("swift", "trl", "easydistill-swift")
+YOLO = ("yolo",)
+STUDENT_ENGINES = (*TRAIN_ENGINES, *YOLO)
 
 PARAMS: tuple[Param, ...] = (
     Param(
@@ -325,15 +327,89 @@ PARAMS: tuple[Param, ...] = (
     Param(
         flag="--max-steps",
         dest="max_steps",
-        help="Maximum optimizer steps (default: TRL 100; Swift framework default).",
+        help="Maximum optimizer steps (default: TRL 100; Swift framework default; "
+        "YOLO: stop after this many batches).",
         kind="int",
-        engines=TRAIN_ENGINES,
+        engines=STUDENT_ENGINES,
         env="DISTILL_MAX_STEPS",
         config_paths=(
             ("swift", "swift.max_steps"),
             ("easydistill-swift", "swift.max_steps"),
             ("trl", "trl.max_steps"),
+            ("yolo", "yolo.max_steps"),
         ),
+    ),
+    Param(
+        flag="--epochs",
+        dest="epochs",
+        help="YOLO training epochs (default: 100).",
+        kind="int",
+        engines=YOLO,
+        env="YOLO_EPOCHS",
+        config_paths=(("yolo", "yolo.epochs"),),
+    ),
+    Param(
+        flag="--imgsz",
+        dest="imgsz",
+        help="YOLO square train/val image size (default: 640).",
+        kind="int",
+        engines=YOLO,
+        env="YOLO_IMGSZ",
+        config_paths=(("yolo", "yolo.imgsz"),),
+    ),
+    Param(
+        flag="--batch",
+        dest="batch",
+        help="YOLO batch size; -1 picks one for ~60%% of GPU memory (default: 16).",
+        kind="int",
+        engines=YOLO,
+        env="YOLO_BATCH",
+        config_paths=(("yolo", "yolo.batch"),),
+    ),
+    Param(
+        flag="--workers",
+        dest="workers",
+        help="YOLO dataloader worker processes (default: 8).",
+        kind="int",
+        engines=YOLO,
+        env="YOLO_WORKERS",
+        config_paths=(("yolo", "yolo.workers"),),
+    ),
+    Param(
+        flag="--pretrained",
+        dest="pretrained",
+        help="Start a named YOLO model from official weights (default: false; "
+        "a name ending in .pt implies true).",
+        kind="bool",
+        engines=YOLO,
+        env="YOLO_PRETRAINED",
+        config_paths=(("yolo", "yolo.pretrained"),),
+    ),
+    Param(
+        flag="--amp",
+        dest="amp",
+        help="YOLO mixed-precision training (default: true; use --no-amp for fp32).",
+        kind="bool",
+        engines=YOLO,
+        env="YOLO_AMP",
+        config_paths=(("yolo", "yolo.amp"),),
+    ),
+    Param(
+        flag="--optimizer",
+        dest="optimizer",
+        help="YOLO optimizer: auto, SGD, Adam or AdamW (default: auto).",
+        engines=YOLO,
+        env="YOLO_OPTIMIZER",
+        config_paths=(("yolo", "yolo.optimizer"),),
+    ),
+    Param(
+        flag="--close-mosaic",
+        dest="close_mosaic",
+        help="Disable YOLO mosaic for the final N epochs (default: 10).",
+        kind="int",
+        engines=YOLO,
+        env="YOLO_CLOSE_MOSAIC",
+        config_paths=(("yolo", "yolo.close_mosaic"),),
     ),
     Param(
         flag="--per-device-train-batch-size",
@@ -364,14 +440,16 @@ PARAMS: tuple[Param, ...] = (
     Param(
         flag="--learning-rate",
         dest="learning_rate",
-        help="Learning rate (default: Swift 1e-4; TRL 1e-5).",
+        help="Learning rate (default: Swift 1e-4; TRL 1e-5; YOLO 0.01, or chosen by "
+        "--optimizer auto).",
         kind="float",
-        engines=TRAIN_ENGINES,
+        engines=STUDENT_ENGINES,
         env="DISTILL_LEARNING_RATE",
         config_paths=(
             ("swift", "swift.learning_rate"),
             ("easydistill-swift", "swift.learning_rate"),
             ("trl", "trl.learning_rate"),
+            ("yolo", "yolo.lr0"),
         ),
     ),
     Param(
@@ -398,14 +476,15 @@ PARAMS: tuple[Param, ...] = (
     Param(
         flag="--logging-steps",
         dest="logging_steps",
-        help="Log interval (default: Swift 5; TRL 1).",
+        help="Log interval (default: Swift 5; TRL 1; YOLO 10).",
         kind="int",
-        engines=TRAIN_ENGINES,
+        engines=STUDENT_ENGINES,
         env="DISTILL_LOGGING_STEPS",
         config_paths=(
             ("swift", "swift.logging_steps"),
             ("easydistill-swift", "swift.logging_steps"),
             ("trl", "trl.logging_steps"),
+            ("yolo", "yolo.log_interval"),
         ),
     ),
     Param(
@@ -525,7 +604,7 @@ PARAMS: tuple[Param, ...] = (
         dest="model_cache_dir",
         help="Where downloaded models are cached; defaults to <work-dir>/models.",
         kind="path",
-        engines=TRAIN_ENGINES,
+        engines=STUDENT_ENGINES,
         env="MODEL_CACHE_DIR",
     ),
     Param(
@@ -540,7 +619,7 @@ PARAMS: tuple[Param, ...] = (
         dest="resume",
         help="Resume from the latest checkpoint already under --output.",
         kind="bool",
-        engines=TRAIN_ENGINES,
+        engines=STUDENT_ENGINES,
         env="DISTILL_RESUME",
     ),
     Param(
@@ -582,7 +661,7 @@ PARAMS: tuple[Param, ...] = (
         dest="device",
         help="Logical GPU index for a single-process training run (default: 0).",
         kind="int",
-        engines=TRAIN_ENGINES,
+        engines=STUDENT_ENGINES,
         env="DISTILL_DEVICE",
         default=0,
     ),
@@ -673,10 +752,11 @@ PARAMS: tuple[Param, ...] = (
     Param(
         flag="--student",
         dest="student",
-        help="Student weights: local path, hf://org/model or ms://org/model.",
+        help="Student weights: local path, hf://org/model or ms://org/model; for yolo also "
+        "a name such as yolo26n, yolo11s.pt, yolov8m or yolov5lu.",
         kind="path",
-        engines=TRAIN_ENGINES,
-        required=TRAIN_ENGINES,
+        engines=STUDENT_ENGINES,
+        required=STUDENT_ENGINES,
         env="STUDENT_MODEL",
         aliases=("--model",),
     ),
@@ -692,10 +772,11 @@ PARAMS: tuple[Param, ...] = (
     Param(
         flag="--dataset",
         dest="dataset",
-        help="Training data: local path or network/Hub URI (SFT JSONL for swift, prompts for trl).",
+        help="Training data: local path or network/Hub URI (SFT JSONL for swift, prompts for "
+        "trl, YOLO txt / COCO json directory, data.yaml or archive for yolo).",
         kind="dataset",
-        engines=("swift", "trl"),
-        required=("swift", "trl"),
+        engines=("swift", "trl", "yolo"),
+        required=("swift", "trl", "yolo"),
         config_fallback=True,
         env="DATASET_URI",
         aliases=("--data",),

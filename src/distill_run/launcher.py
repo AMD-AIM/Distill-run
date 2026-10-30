@@ -63,7 +63,7 @@ def in_distributed_worker() -> bool:
 
 def configure_single_device(ctx: RunContext) -> None:
     """Prevent frameworks from treating all visible GPUs as one-process DataParallel."""
-    if ctx.engine not in {"swift", "trl", "easydistill-swift"}:
+    if ctx.engine not in {"swift", "trl", "easydistill-swift", "yolo"}:
         return
     if world_size(ctx.param("num_processes")) != 1 or in_distributed_worker():
         return

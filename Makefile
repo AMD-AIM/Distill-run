@@ -1,7 +1,7 @@
 PY ?= .venv/bin/python
 PIP ?= .venv/bin/pip
 PROFILE ?= rocm714
-ENGINES ?= swift,trl,easydistill
+ENGINES ?= swift,trl,easydistill,yolo
 
 .PHONY: submodules venv dev install doctor check lint fmt test smoke-multigpu wheelhouse clean
 

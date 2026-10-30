@@ -18,6 +18,7 @@ _ENGINE_ENV = {
     # Generation runs in the EasyDistill environment and launches Swift through
     # the explicit executable exported below.
     "easydistill-swift": "easydistill",
+    "yolo": "yolo",
 }
 _WORKER_MARKER = "DISTILL_RUN_ENGINE_WORKER"
 
