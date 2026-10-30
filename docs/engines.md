@@ -4,7 +4,7 @@ Each engine owns one framework call. Production runs can be configured entirely
 with first-level CLI flags; `--config`, `--config-json`, and `--set` remain
 available for advanced framework fields.
 
-See [`cli-parameters.md`](cli-parameters.md) for all 79 parameters, defaults, and
+See [`cli-parameters.md`](cli-parameters.md) for all 80 parameters, defaults, and
 the engine compatibility matrix. An engine rejects parameters that belong to a
 different one instead of ignoring them.
 
@@ -366,10 +366,14 @@ affects classification heads. The first-level `--epochs`, `--imgsz`, `--batch`,
 
 **Reporting** is on when `--report-to-url` (`report_to.api_base_url`) is set. The
 token is read from the variable named by `report_to.token_env`
-(`REPORT_TO_TOKEN` by default), handed to Ultralytics as
-`ULTRALYTICS_API_KEY`, and never logged. `--report-to-model owner/project/model`
-names the run; with `--report-to-model-id` the events go to that existing
-model instead of creating one. The Platform callback sends `training_started`,
+(`REPORT_TO_TOKEN` by default) and never logged.
+`--report-to-model owner/project/model` names the model.
+`--report-to-protocol` (`report_to.protocol`) picks one of two ways to report.
+
+*`webhook`* (default) hands the token to Ultralytics as `ULTRALYTICS_API_KEY`
+and uses its Platform callback (`/api/webhooks/training/metrics`,
+`/api/webhooks/models/upload`). With `--report-to-model-id` the events go to
+that existing model instead of creating one. The callback sends `training_started`,
 one `epoch_end` per epoch with all metrics, console output, a checkpoint at most
 every 15 minutes, the final `best.pt`, and `training_complete`. The engine adds:
 
@@ -379,15 +383,44 @@ every 15 minutes, the final `best.pt`, and `training_complete`. The engine adds:
 - exit code 10 when training finished but the platform did not take the run, the
   weights upload, or `training_complete`. Local outputs are kept.
 
-Platform calls use the SDK's retry with backoff; the SDK does not read
-`Retry-After`. Checkpoint cadence is the callback's fixed 15 minutes;
+Webhook calls use the SDK's retry with backoff; the SDK does not read
+`Retry-After`. Checkpoint cadence is the callback's fixed 15 minutes.
+
+*`rest`* uses the public API instead (design doc §8.2 / §8.3) and needs
+`--report-to-model-id`, which is the upload `assetId`:
+
+| when | calls |
+|---|---|
+| training starts | `PATCH /api/models/{owner}/{project}/{model}` with `status: training`; 400/401/403/404/409 stops the run with exit 10 before the first epoch |
+| every `report_to.metrics_every_epochs` (1) | `PATCH` with `metrics` (`mAP50`, `mAP50-95`, `precision`, `recall`), `epochs`, `bestEpoch`, `bestFitness`, `datasetSlug`, `metadata` |
+| every `report_to.checkpoint_every_epochs` (10; 0 turns it off) | upload a copy of `last.pt` as `last.pt` |
+| every `report_to.heartbeat_seconds` | `PATCH` with `status` and `metadata` only |
+| training ends | upload `best.pt`, then `PATCH` with `status: completed` (or `cancelled`) and `trainResults` (the `summary.json` content) |
+| training raises | `PATCH` with `status: failed` and `trainingError` |
+
+An upload is `POST /api/upload/signed-url` (`assetType: models`, `assetId`,
+`filename`, `contentType`, `totalBytes`), then `PUT uploadUrl` with every
+returned header and no `Authorization`, then `POST /api/upload/complete`. A 412
+on the PUT starts again from the signed URL, up to three times. Every call
+retries 429 after `Retry-After` (or `X-RateLimit-Reset`), and 5xx and network
+errors with exponential backoff, up to `report_to.rest.max_attempts` (5) times;
+other 4xx fail at once. Intermediate reports run on a background thread and
+only log a warning when they fail. A failed final upload or final `PATCH` exits
+10. `PATCH` never sends `name` or `projectId`.
+
+The fields that are not settled yet are configurable under `report_to`:
+`rest.paths`, `rest.statuses` (`training`, `completed`, `failed`, `cancelled`),
+`rest.train_results_field` (empty string drops it), `rest.upload_md5` (base64
+MD5 on `complete`), and `metadata` (merged into every `PATCH`, for example
+`--set report_to.metadata.session_id=sess_7f3a`).
+
 `save_period` only controls local checkpoints. Ultralytics telemetry, hub sync
 and other loggers are turned off, and `YOLO_AUTOINSTALL=False`.
 
 **Expired dataset URLs**: with `--dataset-slug owner/dataset` (and optionally
 `--dataset-version N`), a 400/401/403 on the NDJSON download calls
-`GET /api/datasets/{owner}/{dataset}/export?v=N` for a fresh link and retries,
-at most twice. Image URLs inside the NDJSON are not re-signed. URLs are logged
+`GET /api/datasets/{owner}/{dataset}/export?v=N` (`rest.paths.dataset_export`)
+for a fresh link and retries, at most twice, in either protocol. Image URLs inside the NDJSON are not re-signed. URLs are logged
 without their query string.
 
 **Outputs** (`--output`): Ultralytics' usual run directory (`weights/best.pt`,

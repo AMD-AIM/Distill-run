@@ -115,7 +115,30 @@ YOLO = {
 
 ULTRALYTICS = {
     "train_args": {},
-    "report_to": {"token_env": "REPORT_TO_TOKEN", "heartbeat_seconds": 600},
+    "report_to": {
+        "token_env": "REPORT_TO_TOKEN",
+        "protocol": "webhook",
+        "heartbeat_seconds": 600,
+        # protocol: rest only; webhook uploads a checkpoint at most every 15 minutes.
+        "metrics_every_epochs": 1,
+        "checkpoint_every_epochs": 10,
+        "metadata": {},
+        "rest": {
+            "paths": {
+                "signed_url": "/api/upload/signed-url",
+                "complete": "/api/upload/complete",
+                "model": "/api/models/{owner}/{project}/{model}",
+                "dataset_export": "/api/datasets/{owner}/{dataset}/export",
+            },
+            "statuses": {"running": "training", "completed": "completed",
+                         "failed": "failed", "cancelled": "cancelled"},
+            "train_results_field": "trainResults",
+            "upload_md5": False,
+            "timeout_seconds": 60,
+            "max_attempts": 5,
+            "max_retry_wait": 300,
+        },
+    },
 }
 
 _BY_ENGINE: dict[str, dict[str, Any]] = {

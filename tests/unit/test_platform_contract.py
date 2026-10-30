@@ -215,10 +215,19 @@ def test_progress_skips_the_final_validation_callback(tmp_path: Path, capsys):
 
     configure_logging()
     hooks = _hooks(tmp_path)
-    trainer = SimpleNamespace(epochs=2, start_epoch=0, train_time_start=time.time(), fitness=0.5)
-    for epoch in (0, 1, 2):
+    trainer = SimpleNamespace(epochs=10, start_epoch=0, train_time_start=time.time(), fitness=0.5)
+
+    def final_eval():  # as in Ultralytics: one more on_fit_epoch_end at epoch + 1
+        trainer.epoch += 1
+        hooks.fit_epoch_end(trainer)
+        trainer.epoch -= 1
+
+    trainer.final_eval = final_eval
+    hooks.pretrain_start(trainer)
+    for epoch in (0, 1):  # stopped early, after 2 of 10 epochs
         trainer.epoch = epoch
         hooks.fit_epoch_end(trainer)
+    trainer.final_eval()
     progress = [events.parse(x) for x in capsys.readouterr().out.splitlines()]
     assert [p["epoch"] for p in progress if p and p["event"] == "progress"] == [1, 2]
 

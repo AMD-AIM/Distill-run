@@ -459,6 +459,15 @@ PARAMS: tuple[Param, ...] = (
         config_paths=(("ultralytics", "report_to.model_id"),),
     ),
     Param(
+        flag="--report-to-protocol",
+        dest="report_to_protocol",
+        help="webhook (default): Ultralytics' own Platform callback; rest: the public "
+        "upload + PATCH /api/models API, which needs --report-to-model-id.",
+        engines=ULTRA,
+        env="REPORT_TO_PROTOCOL",
+        config_paths=(("ultralytics", "report_to.protocol"),),
+    ),
+    Param(
         flag="--dataset-slug",
         dest="dataset_slug",
         help="Platform dataset as owner/dataset; used to re-sign an expired --data URL.",

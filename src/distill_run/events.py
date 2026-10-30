@@ -27,9 +27,12 @@ logger.setLevel(logging.INFO)
 _current: dict[str, str | None] = {"stage": None}
 
 
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
 def emit(event: str, **fields: Any) -> None:
-    payload = {"event": event, **fields,
-               "time": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")}
+    payload = {"event": event, **fields, "time": utc_now()}
     logger.info("%s %s", MARKER, json.dumps(payload, ensure_ascii=False, default=str))
 
 
