@@ -112,6 +112,87 @@ def test_archive_is_extracted_once(tmp_path: Path):
     assert (tmp_path / "set.zip.extracted" / ".complete").is_file()
 
 
+@pytest.fixture
+def image_server(tmp_path: Path):
+    import functools
+    import http.server
+    import threading
+
+    root = tmp_path / "srv"
+    root.mkdir()
+    for i in range(10):
+        (root / f"{i}.jpg").write_bytes(b"jpeg-bytes")
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root))
+    handler.log_message = lambda *a, **k: None
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+
+
+def _manifest(path: Path, base: str, *, sig: str, count: int = 10, task: str = "detect") -> Path:
+    lines = [{"type": "dataset", "task": task, "class_names": {"0": "cat", "1": "dog"}}]
+    for i in range(count):
+        lines.append({"type": "image", "file": f"img{i}.jpg", "split": "train",
+                      "url": f"{base}/{i}.jpg?X-Signature={sig}",
+                      "annotations": {"boxes": [[i % 2, 0.5, 0.5, 0.2, 0.2]]}})
+    path.write_text("".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
+    return path
+
+
+def test_ndjson_is_downloaded_split_and_cached_across_signatures(tmp_path: Path, image_server):
+    cache = tmp_path / "cache"
+    data = load_detection_data(_manifest(tmp_path / "a.ndjson", image_server, sig="one"),
+                               cache_dir=cache)
+    assert data.format == "ndjson"
+    assert data.names == {0: "cat", 1: "dog"}
+    assert (len(data.train), len(data.val)) == (9, 1)
+    assert data.train[0][1].shape == (1, 5)
+    converted = sorted(p.name for p in cache.iterdir())
+
+    again = load_detection_data(_manifest(tmp_path / "a.ndjson", image_server, sig="two"),
+                                cache_dir=cache)
+    assert sorted(p.name for p in cache.iterdir()) == converted
+    assert [p for p, _ in again.val] == [p for p, _ in data.val]
+
+
+def test_ndjson_download_failure_and_unsupported_task(tmp_path: Path, image_server):
+    from distill_run.errors import DatasetFetchError
+
+    with pytest.raises(DatasetFetchError, match="downloaded 10/11"):
+        manifest = _manifest(tmp_path / "b.ndjson", image_server, sig="x", count=11)
+        load_detection_data(manifest, cache_dir=tmp_path / "cache")
+    with pytest.raises(DataFormatError, match="detect only"):
+        load_detection_data(_manifest(tmp_path / "c.ndjson", image_server, sig="x", task="pose"),
+                            cache_dir=tmp_path / "cache")
+
+
+def test_training_log_keeps_columns_fixed_and_truncates_on_resume(tmp_path: Path):
+    import csv
+
+    from distill_run.yolo.report import COLUMNS, TrainingLog, epoch_row
+
+    log = TrainingLog(tmp_path, 0)
+    metrics = {"precision": 0.5, "recall": 0.4, "mAP50": 0.3, "mAP50-95": float("nan")}
+    for epoch in (1, 2, 3):
+        log.append(epoch_row(epoch, epoch * 1.5, {"box_loss": 1.0, "cls_loss": 2.0, "dfl_loss": 3.0},
+                             metrics if epoch < 3 else {}, {}, [0.01, 0.01, 0.01]),
+                   step=epoch * 10)
+    with log.csv.open(newline="") as f:
+        reader = csv.reader(f)
+        header, *rows = list(reader)
+    assert tuple(header) == COLUMNS
+    assert all(len(r) == len(COLUMNS) for r in rows)
+    assert rows[2][COLUMNS.index("metrics/mAP50(B)")] == ""
+    records = [json.loads(line) for line in log.jsonl.read_text().splitlines()]
+    assert records[0]["metrics/mAP50-95(B)"] is None and records[0]["step"] == 10
+
+    resumed = TrainingLog(tmp_path, 2)
+    assert [r["epoch"] for r in log.rows()] == ["1", "2"]
+    assert resumed.elapsed() == 3.0
+    assert len(log.jsonl.read_text().splitlines()) == 2
+
+
 torch = pytest.importorskip("torch")
 
 

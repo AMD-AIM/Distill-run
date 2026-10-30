@@ -274,6 +274,14 @@ cached download. The following layouts are detected:
   directory name starts with `coco`.
 - COCO json: `annotations/instances_<split>.json` next to `images/<split>`, or
   `data.yaml` split entries that point at `.json` files.
+- Ultralytics Platform NDJSON (`*.ndjson`, for example a signed export URL). The
+  first line holds `task` and `class_names`; each further line holds one image's
+  `file`, `split`, `url` and `annotations.boxes` (`[cls, cx, cy, w, h]`). Images are
+  downloaded with 32 threads into `<dataset-cache-dir>/ndjson/<name>-<hash>/`.
+  The hash ignores URL query strings, so a re-signed export of the same data reuses
+  the earlier download. Without a `val` split, a seeded 10% of `train` becomes
+  `val`, as on the Platform. Only `task: detect` is accepted. If any image fails to
+  download, the run fails with exit code 5.
 
 If there is no `val` split, the engine validates on the training images. Set
 `yolo.val_fraction` to hold out a fraction of them instead.
@@ -291,8 +299,24 @@ augmentation) is under `yolo.*`; see `distill-run --engine yolo
 **Outputs** (`--output`): `weights/last.pt` holds the resumable state;
 `weights/best.pt` holds the EMA weights with the best fitness
 (`0.1·mAP50 + 0.9·mAP50-95`). The run also writes `best.safetensors` and
-`config.json` for reloading, plus `results.csv` and `summary.json`. Ctrl-C stops
-at the next batch and still writes all of these.
+`config.json` for reloading, and `summary.json` (final metrics, `best_epoch`,
+peak memory).
+
+Training curves are written once per epoch:
+
+- `results.csv` uses the Ultralytics column names (`epoch`, `time`,
+  `train/{box,cls,dfl}_loss`, `metrics/{precision,recall,mAP50,mAP50-95}(B)`,
+  `val/{box,cls,dfl}_loss`, `lr/pg0..2`), so the Ultralytics Platform and its
+  plotting tools read it unchanged. A cell is empty when an epoch was not
+  validated.
+- `metrics.jsonl` holds the same values as one JSON object per epoch, plus
+  `step`, `fitness`, `best_epoch` and `total_epochs`. Read it to follow a run
+  while it trains.
+- `results.png` plots the ten loss and metric curves when matplotlib is
+  installed.
+
+`--resume` drops the rows it is about to train again. Ctrl-C stops at the next
+batch and still writes all of these files.
 
 ---
 

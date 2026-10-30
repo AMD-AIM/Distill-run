@@ -7,6 +7,7 @@ Two label formats share one in-memory index of ``(image, labels)`` pairs, where
   ``images/<split>`` + ``labels/<split>`` tree.
 * COCO json: ``annotations/instances_<split>.json`` next to ``images/<split>``
   (or ``<split>/``), or split entries in ``data.yaml`` pointing at ``.json`` files.
+* Ultralytics Platform NDJSON: converted to a YOLO txt tree first (:mod:`.ndjson`).
 
 Archives (zip/tar) are unpacked once next to the downloaded file.
 """
@@ -26,6 +27,8 @@ from typing import Any
 
 import numpy as np
 import yaml
+
+from . import ndjson
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +121,19 @@ def _check_member(root: Path, name: str) -> None:
 
 
 def load_detection_data(
-    location: Path, *, names: Any = None, val_fraction: float = 0.0, seed: int = 0
+    location: Path, *, names: Any = None, val_fraction: float = 0.0, seed: int = 0,
+    cache_dir: Path | None = None,
 ) -> DetectionData:
+    """``cache_dir`` receives converted NDJSON datasets (default: next to the manifest)."""
     path = Path(location)
     if is_archive(path):
         path = extract(path)
+    converted = ndjson.looks_like_ndjson(path)
+    if converted:
+        try:
+            path = ndjson.convert(path, cache_dir or path.with_name(path.name + ".converted"))
+        except ndjson.NdjsonError as exc:
+            raise DataFormatError(str(exc)) from exc
     if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}:
         data = _from_yaml(path)
     elif path.is_file() and path.suffix.lower() == ".json":
@@ -131,6 +142,8 @@ def load_detection_data(
         data = _from_directory(path)
     else:
         raise DataFormatError(f"unsupported dataset location: {path}")
+    if converted:
+        data.format = "ndjson"
     if names is not None:
         data.names = _normalise_names(names)
     if not data.train:

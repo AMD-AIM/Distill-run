@@ -80,6 +80,7 @@ class YoloEngine(Engine):
                 names=section.get("names"),
                 val_fraction=float(section.get("val_fraction", 0.0)),
                 seed=int(section.get("seed", 0)),
+                cache_dir=ctx.cache_dir / "ndjson",
             )
         except (DataFormatError, OSError, ValueError, KeyError) as exc:
             raise DataError(f"detection dataset: {exc}") from exc
@@ -133,7 +134,7 @@ class YoloEngine(Engine):
         except Exception as exc:  # noqa: BLE001 - normalise OOM and friends
             logger.exception("yolo training failed")
             raise classify(exc) from exc
-        artifacts = [Path(p) for p in summary["artifacts"]]
+        artifacts = [Path(p) for p in (*summary["artifacts"], *summary.get("records", ()))]
         metrics = summary.get("final_metrics") or {}
         message = (
             f"{summary['model']} trained {summary['global_step']} steps, "

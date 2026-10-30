@@ -3,3 +3,4 @@ numpy
 opencv-python-headless
 safetensors
 huggingface_hub>=0.23
+matplotlib  # results.png only; training runs without it

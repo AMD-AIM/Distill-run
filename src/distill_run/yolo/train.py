@@ -4,13 +4,14 @@ Outputs under the run directory::
 
     weights/last.pt   resumable state (model, EMA, optimizer, scaler, counters)
     weights/best.pt   EMA weights with the best fitness so far
-    results.csv       one row per epoch
+    results.csv       one row per epoch (Ultralytics column names)
+    metrics.jsonl     the same rows as JSON, plus step and fitness
+    results.png       loss and metric curves (needs matplotlib)
     best.safetensors  final EMA weights of the best epoch, plus config.json
 """
 
 from __future__ import annotations
 
-import csv
 import json
 import logging
 import math
@@ -30,6 +31,7 @@ from .data import DetectionData, DetectionDataset, collate
 from .loss import build_loss, xywh2xyxy
 from .metrics import DetectionMetrics, end2end_filter, non_max_suppression
 from .model import DetectionModel
+from .report import LOSSES, TrainingLog, epoch_row
 
 logger = logging.getLogger("distill_run.yolo")
 
@@ -184,13 +186,18 @@ def build_optimizer(model: nn.Module, cfg: TrainConfig, iterations: int, nc: int
 
 @torch.no_grad()
 def evaluate(model: DetectionModel, loader, device: torch.device, cfg: TrainConfig,
-             nc: int, amp: bool) -> dict[str, float]:
+             nc: int, amp: bool, loss_fn=None) -> tuple[dict[str, float], dict[str, float]]:
+    """Return ``(metrics, val_losses)``; losses are empty without ``loss_fn``."""
     model.eval()
     metrics = DetectionMetrics(nc)
+    loss_sum, batches = torch.zeros(3, device=device), 0
     for images, labels, _ in loader:
         images = images.to(device, non_blocking=True).float() / 255
         with torch.autocast(device.type, dtype=torch.float16, enabled=amp and device.type == "cuda"):
-            decoded, _ = model(images)
+            decoded, raw = model(images)
+        if loss_fn is not None:
+            loss_sum += loss_fn(raw, labels.to(device))[1]
+            batches += 1
         decoded = decoded.float()
         if model.head.end2end:
             dets = end2end_filter(decoded, cfg.conf)
@@ -201,7 +208,8 @@ def evaluate(model: DetectionModel, loader, device: torch.device, cfg: TrainConf
             rows = labels[labels[:, 0] == i]
             gt_boxes = xywh2xyxy(rows[:, 2:6] * size).to(device)
             metrics.update(det, rows[:, 1].to(device), gt_boxes)
-    return metrics.compute()
+    losses = dict(zip(LOSSES, (loss_sum / batches).tolist())) if batches else {}
+    return metrics.compute(), losses
 
 
 class Trainer:
@@ -223,6 +231,7 @@ class Trainer:
         self.should_stop = should_stop
         self.resume = resume
         self.amp = bool(cfg.amp) and device.type == "cuda"
+        self._best_epoch = 0
 
     def _loaders(self, batch: int):
         cfg = self.cfg
@@ -280,6 +289,7 @@ class Trainer:
             scaler.load_state_dict(state["scaler"])
             start_epoch, best_fitness = state["epoch"] + 1, state["best_fitness"]
             global_step = state.get("global_step", 0)
+            self._best_epoch = state.get("best_epoch", 0)
             for _ in range(start_epoch):
                 scheduler.step()
                 if hasattr(loss_fn, "update"):
@@ -290,9 +300,9 @@ class Trainer:
 
         nw = max(round(cfg.warmup_epochs * nb), 100) if cfg.warmup_epochs > 0 else -1
         last_opt_step = -1
-        results_csv = self.save_dir / "results.csv"
-        if start_epoch == 0 and results_csv.exists():
-            results_csv.unlink()
+        log = TrainingLog(self.save_dir, start_epoch)
+        elapsed_before = log.elapsed()
+        best_epoch = self._best_epoch
         logger.info(
             "train: %d images, val: %d images, batch=%d accumulate=%d imgsz=%d epochs=%d amp=%s",
             len(self.data.train), len(self.data.val), batch, accumulate, cfg.imgsz, cfg.epochs,
@@ -359,23 +369,28 @@ class Trainer:
             if hasattr(loss_fn, "update"):
                 loss_fn.update()
 
-            metrics = (
-                evaluate(ema.ema, val_loader, device, cfg, self.data.nc, self.amp)
-                if cfg.val and stopped != "cancelled" else {}
+            metrics, val_losses = (
+                evaluate(ema.ema, val_loader, device, cfg, self.data.nc, self.amp, loss_fn)
+                if cfg.val and stopped != "cancelled" else ({}, {})
             )
             fitness = 0.1 * metrics.get("mAP50", 0) + 0.9 * metrics.get("mAP50-95", 0)
-            box, cls_, dfl = mean_items.tolist()
-            row = {"epoch": epoch + 1, "steps": global_step, "train/box": box, "train/cls": cls_,
-                   "train/dfl": dfl, **{f"val/{k}": v for k, v in metrics.items()},
-                   "lr": optimizer.param_groups[1]["lr"], "time": time.time() - t_start}
-            self._append_csv(results_csv, row)
             if metrics:
                 final_metrics = metrics
                 logger.info("val epoch %d: %s", epoch + 1,
                             " ".join(f"{k}={v:.4f}" for k, v in metrics.items()))
             improved = fitness > best_fitness
             best_fitness = max(best_fitness, fitness)
-            self._save(last, model, ema, optimizer, scaler, epoch, best_fitness, global_step)
+            if improved:
+                best_epoch = epoch + 1
+            log.append(
+                epoch_row(epoch + 1, elapsed_before + time.time() - t_start,
+                          dict(zip(LOSSES, mean_items.tolist())),
+                          metrics, val_losses, [g["lr"] for g in optimizer.param_groups]),
+                step=global_step, fitness=fitness if metrics else None,
+                best_epoch=best_epoch, total_epochs=cfg.epochs,
+            )
+            self._save(last, model, ema, optimizer, scaler, epoch, best_fitness, global_step,
+                       best_epoch)
             if improved:
                 self._save_weights(self.weights_dir / "best.pt", ema.ema)
             if stopped:
@@ -386,6 +401,12 @@ class Trainer:
         if not (self.weights_dir / "best.pt").exists():
             self._save_weights(self.weights_dir / "best.pt", ema.ema)
         exported = self._export()
+        try:
+            plot = log.plot()
+        except Exception as exc:  # a broken plotting backend must not fail a finished run
+            logger.warning("results.png not written: %s", exc)
+            plot = None
+        records = [log.csv, log.jsonl, *([plot] if plot else [])]
         peak = torch.cuda.max_memory_reserved(device) / 2**30 if device.type == "cuda" else 0.0
         summary = {
             "model": f"{self.model.family}{self.model.scale}",
@@ -394,10 +415,13 @@ class Trainer:
             "batch": batch,
             "stopped": stopped,
             "best_fitness": best_fitness,
+            "best_epoch": best_epoch,
+            "total_epochs": cfg.epochs,
             "final_metrics": final_metrics,
             "seconds": round(time.time() - t_start, 1),
             "peak_mem_gib": round(peak, 2),
             "artifacts": [str(p) for p in exported],
+            "records": [str(p) for p in records],
         }
         (self.save_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         return summary
@@ -408,7 +432,8 @@ class Trainer:
                 "imgsz": self.cfg.imgsz, "stride": m.stride.tolist(),
                 "train_config": asdict(self.cfg)}
 
-    def _save(self, path, model, ema, optimizer, scaler, epoch, best_fitness, global_step):
+    def _save(self, path, model, ema, optimizer, scaler, epoch, best_fitness, global_step,
+              best_epoch):
         state = {
             **self._meta(),
             "model": model.state_dict(),
@@ -419,6 +444,7 @@ class Trainer:
             "epoch": epoch,
             "best_fitness": best_fitness,
             "global_step": global_step,
+            "best_epoch": best_epoch,
         }
         tmp = path.with_suffix(".tmp")
         torch.save(state, tmp)
@@ -445,12 +471,3 @@ class Trainer:
         save_file({k: v.contiguous() for k, v in best["state_dict"].items()}, str(target),
                   metadata={"family": meta["family"], "scale": meta["scale"], "nc": str(meta["nc"])})
         return [target, *artifacts]
-
-    @staticmethod
-    def _append_csv(path: Path, row: dict[str, Any]) -> None:
-        exists = path.exists()
-        with path.open("a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=list(row))
-            if not exists:
-                writer.writeheader()
-            writer.writerow(row)
