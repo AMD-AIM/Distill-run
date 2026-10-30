@@ -19,6 +19,7 @@ class ExitCode(IntEnum):
     PREFLIGHT_FAILED = 7
     ENGINE_FAILED = 8
     OOM = 9
+    REPORT_FAILED = 10
     INTERNAL = 70
     CANCELLED = 130
 
@@ -57,6 +58,20 @@ class DatasetFetchError(DistillRunError):
 class ModelFetchError(DistillRunError):
     code = "ModelFetchFailed"
     exit_code = ExitCode.DATASET_FETCH_FAILED
+
+
+class IntegrityError(DistillRunError):
+    """A downloaded dataset or weights file does not match its declared digest."""
+
+    code = "IntegrityCheckFailed"
+    exit_code = ExitCode.DATASET_FETCH_FAILED
+
+
+class ReportError(DistillRunError):
+    """Training finished but the results could not be delivered to the platform."""
+
+    code = "ReportFailed"
+    exit_code = ExitCode.REPORT_FAILED
 
 
 class TeacherUnavailableError(DistillRunError):

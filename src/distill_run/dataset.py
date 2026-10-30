@@ -14,10 +14,12 @@ import logging
 import os
 import shutil
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
+from . import integrity
 from .catalog import dataset_error_hint
 from .errors import DatasetFetchError
 from .fetchers import FETCHERS
@@ -40,6 +42,9 @@ class DatasetSpec:
     max_samples: int | None = None
     shuffle_seed: int = 42
     purpose: str | None = None
+    sha256: str | None = None
+    # Returns a fresh URL when a signed ``uri`` has expired (HTTP 400/401/403).
+    refresh: Callable[[], str] | None = field(default=None, compare=False, repr=False)
 
     @property
     def scheme(self) -> str:
@@ -148,8 +153,12 @@ def resolve(spec: DatasetSpec, cache_dir: Path) -> ResolvedDataset:
             f"supported: local path, http(s), hf, ms{dataset_error_hint()}"
         )
 
+    if spec.sha256:
+        integrity.parse_digest(spec.sha256)
     if fetcher.name == "local":
         path = fetcher.fetch(spec, cache_dir)
+        if spec.sha256:
+            integrity.verify(path, spec.sha256, "dataset")
         path = normalize_dataset(path, spec, cache_dir)
         logger.info("dataset %s -> local path %s", spec.describe(), path)
         return ResolvedDataset(spec=spec, path=path)
@@ -158,12 +167,18 @@ def resolve(spec: DatasetSpec, cache_dir: Path) -> ResolvedDataset:
     entry = cache_entry(spec, cache_dir)
     if entry.is_complete:
         cached = entry.stored_path()
-        if cached.exists():
+        if cached.exists() and spec.sha256 and not (
+            cached.is_file() and integrity.matches(cached, spec.sha256)
+        ):
+            logger.warning("cached %s does not match its sha256; refetching", spec.describe())
+            _drop(entry)
+        elif cached.exists():
             cached = normalize_dataset(cached, spec, cache_dir, reuse=True)
             logger.info("dataset %s -> cache hit %s", spec.describe(), cached)
             return ResolvedDataset(spec=spec, path=cached, from_cache=True)
-        logger.warning("stale cache marker for %s; refetching", spec.describe())
-        entry.marker.unlink(missing_ok=True)
+        else:
+            logger.warning("stale cache marker for %s; refetching", spec.describe())
+            entry.marker.unlink(missing_ok=True)
 
     staged = entry.stage_dir()
     try:
@@ -181,6 +196,17 @@ def resolve(spec: DatasetSpec, cache_dir: Path) -> ResolvedDataset:
     except BaseException:
         shutil.rmtree(staged, ignore_errors=True)
         raise
+    if spec.sha256:
+        try:
+            integrity.verify(final, spec.sha256, "dataset")
+        except BaseException:
+            _drop(entry)
+            raise
     final = normalize_dataset(final, spec, cache_dir)
     logger.info("dataset %s -> downloaded %s", spec.describe(), final)
     return ResolvedDataset(spec=spec, path=final)
+
+
+def _drop(entry: CacheEntry) -> None:
+    entry.marker.unlink(missing_ok=True)
+    shutil.rmtree(entry.payload_dir, ignore_errors=True)

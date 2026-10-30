@@ -69,6 +69,7 @@ def make_spec(ctx: RunContext, uri: str) -> DatasetSpec:
         max_samples=ctx.param("dataset_max_samples"),
         shuffle_seed=ctx.param("dataset_shuffle_seed", 42),
         purpose=_DATASET_PURPOSE.get(ctx.engine),
+        sha256=ctx.param("dataset_sha256"),
     )
 
 

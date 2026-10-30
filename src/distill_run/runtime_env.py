@@ -19,6 +19,7 @@ _ENGINE_ENV = {
     # the explicit executable exported below.
     "easydistill-swift": "easydistill",
     "yolo": "yolo",
+    "ultralytics": "ultralytics",
 }
 _WORKER_MARKER = "DISTILL_RUN_ENGINE_WORKER"
 

@@ -63,28 +63,61 @@ class HttpFetcher(Fetcher):
     def can_handle(self, spec: DatasetSpec) -> bool:
         return spec.scheme in {"http", "https"}
 
+    # Signed URLs answer 400 (GCS ExpiredToken), 401 or 403 once they expire.
+    EXPIRED = frozenset({400, 401, 403})
+    MAX_REFRESHES = 2
+
     def fetch(self, spec: DatasetSpec, staging: Path) -> Path:
         filename = Path(unquote(urlparse(spec.uri).path)).name or "dataset"
         target = staging / filename
-        logger.info("downloading %s -> %s", spec.uri, target)
-        try:
-            with http_session().get(spec.uri, stream=True, timeout=HTTP_TIMEOUT) as resp:
-                resp.raise_for_status()
-                total = int(resp.headers.get("Content-Length") or 0)
-                written = 0
-                with target.open("wb") as f:
-                    for chunk in resp.iter_content(CHUNK):
-                        f.write(chunk)
-                        written += len(chunk)
-        except requests.RequestException as exc:
-            raise DatasetFetchError(f"failed to download {spec.uri}: {exc}") from exc
+        url, refreshes = spec.uri, 0
+        while True:
+            logger.info("downloading %s -> %s", redact_url(url), target)
+            try:
+                return self._get(url, target)
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else None
+                if spec.refresh is None or status not in self.EXPIRED or refreshes >= self.MAX_REFRESHES:
+                    raise DatasetFetchError(
+                        f"failed to download {redact_url(url)}: HTTP {status}"
+                    ) from exc
+                refreshes += 1
+                logger.warning("dataset URL rejected (HTTP %s); requesting a fresh link (%d/%d)",
+                               status, refreshes, self.MAX_REFRESHES)
+                try:
+                    url = spec.refresh()
+                except DatasetFetchError:
+                    raise
+                except Exception as refresh_exc:  # noqa: BLE001 - SDK and HTTP errors alike
+                    raise DatasetFetchError(
+                        f"dataset URL expired and refreshing it failed: {refresh_exc}"
+                    ) from refresh_exc
+            except requests.RequestException as exc:
+                raise DatasetFetchError(f"failed to download {redact_url(url)}: {exc}") from exc
+
+    @staticmethod
+    def _get(url: str, target: Path) -> Path:
+        with http_session().get(url, stream=True, timeout=HTTP_TIMEOUT) as resp:
+            resp.raise_for_status()
+            total = int(resp.headers.get("Content-Length") or 0)
+            written = 0
+            with target.open("wb") as f:
+                for chunk in resp.iter_content(CHUNK):
+                    f.write(chunk)
+                    written += len(chunk)
         if written == 0:
-            raise DatasetFetchError(f"downloaded 0 bytes from {spec.uri}")
+            raise DatasetFetchError(f"downloaded 0 bytes from {redact_url(url)}")
         if total and written != total:
             raise DatasetFetchError(
-                f"incomplete download from {spec.uri}: got {written} of {total} bytes"
+                f"incomplete download from {redact_url(url)}: got {written} of {total} bytes"
             )
         return target
+
+
+def redact_url(url: str) -> str:
+    """Drop the query string, which holds the signature of a signed URL."""
+    parsed = urlparse(url)
+    return parsed._replace(query="", fragment="").geturl() if parsed.query else url
 
 
 class HuggingFaceFetcher(Fetcher):

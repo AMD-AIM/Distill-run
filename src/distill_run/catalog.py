@@ -37,6 +37,11 @@ ENGINE_CATALOG: dict[str, dict[str, str]] = {
         "mode": "object detection training",
         "input": "YOLO txt or COCO json dataset + model name or .pt weights",
     },
+    "ultralytics": {
+        "framework": "Ultralytics (pip package), with Ultralytics Platform reporting",
+        "mode": "object detection training",
+        "input": "Platform NDJSON, data.yaml or zip + model name, .pt, .yaml or ul:// URI",
+    },
     "noop": {
         "framework": "built-in",
         "mode": "CLI test engine",

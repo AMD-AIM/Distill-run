@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -193,7 +194,31 @@ def _coerce(param: P.Param, raw: Any) -> Any:
         if isinstance(raw, list):
             return raw
         return [item.strip() for item in str(raw).split(",") if item.strip()]
+    if param.kind == "json":
+        if isinstance(raw, dict):
+            return raw
+        text = str(raw).strip()
+        try:
+            parsed = yaml.safe_load(text) if text.startswith("{") else _key_values(text)
+        except (yaml.YAMLError, ValueError) as exc:
+            raise UsageError(
+                f"{param.flag} expects a JSON object or key=value pairs: {exc}"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise UsageError(f"{param.flag} expects a JSON object, got {type(parsed).__name__}")
+        return parsed
     return raw
+
+
+def _key_values(text: str) -> dict[str, Any]:
+    """``epochs=100 lr0=0.01 cos_lr=True``, as on the Ultralytics command line."""
+    result: dict[str, Any] = {}
+    for token in shlex.split(text):
+        key, sep, value = token.partition("=")
+        if not sep or not key.strip():
+            raise ValueError(f"{token!r} is not key=value")
+        result[key.strip()] = yaml.safe_load(value) if value else ""
+    return result
 
 
 def merge_sources(engine: str, args: dict[str, Any], env: dict[str, str]) -> Resolved:

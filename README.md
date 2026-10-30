@@ -137,12 +137,17 @@ Failures are separated so a shell script can tell a typo from a dead teacher.
 | 2 | bad or missing arguments |
 | 3 | config file invalid |
 | 4 | dataset content invalid |
-| 5 | dataset could not be fetched |
+| 5 | dataset could not be fetched, or a dataset/weights `sha256` did not match |
 | 6 | teacher endpoint unreachable |
 | 7 | preflight failed (weights missing, disk full, …) |
 | 8 | engine failed |
 | 9 | out of memory |
+| 10 | results could not be reported to the platform |
 | 130 | cancelled by Ctrl-C / SIGTERM |
+
+The process also writes one `DISTILL_EVENT <json>` line on stdout per stage,
+per epoch, and at exit; see
+[`docs/engines.md`](docs/engines.md#progress-events).
 
 ## How a run is put together
 

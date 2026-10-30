@@ -113,12 +113,18 @@ YOLO = {
     }
 }
 
+ULTRALYTICS = {
+    "train_args": {},
+    "report_to": {"token_env": "REPORT_TO_TOKEN", "heartbeat_seconds": 600},
+}
+
 _BY_ENGINE: dict[str, dict[str, Any]] = {
     "easydistill": EASYDISTILL,
     "swift": SWIFT,
     "trl": TRL,
     "easydistill-swift": EASYDISTILL_SWIFT,
     "yolo": YOLO,
+    "ultralytics": ULTRALYTICS,
     "noop": {},
 }
 

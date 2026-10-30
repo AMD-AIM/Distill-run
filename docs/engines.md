@@ -4,7 +4,7 @@ Each engine owns one framework call. Production runs can be configured entirely
 with first-level CLI flags; `--config`, `--config-json`, and `--set` remain
 available for advanced framework fields.
 
-See [`cli-parameters.md`](cli-parameters.md) for all 69 parameters, defaults, and
+See [`cli-parameters.md`](cli-parameters.md) for all 79 parameters, defaults, and
 the engine compatibility matrix. An engine rejects parameters that belong to a
 different one instead of ignoring them.
 
@@ -316,7 +316,117 @@ Training curves are written once per epoch:
   installed.
 
 `--resume` drops the rows it is about to train again. Ctrl-C stops at the next
-batch and still writes all of these files.
+batch, still writes all of these files, and exits with code 130.
+
+---
+
+## `ultralytics` — object detection through the Ultralytics package
+
+Calls `ultralytics.YOLO(...).train()` and reports to Ultralytics Platform with
+the package's own Platform callback. Install it with
+`scripts/setup_envs.py --engines ultralytics`
+(`requirements/rocm714-ultralytics.txt`). Ultralytics is AGPL-3.0.
+
+```bash
+export REPORT_TO_TOKEN=...            # never pass the token as a flag
+distill-run --engine ultralytics --model yolo26n.pt \
+  --data "$SIGNED_NDJSON_URL" --dataset-sha256 sha256:3f5c... \
+  --train-args 'epochs=100 imgsz=640 batch=-1 patience=20 mixup=0.1' \
+  --report-to-url https://platform.example.com \
+  --report-to-model acme-vision/warehouse/exp-1 --report-to-model-id m-123 \
+  --dataset-slug acme-vision/warehouse --dataset-version 3 \
+  --output /output/exp-1
+```
+
+**`--model`**: `yolo26n.pt` (downloaded once to `<model-cache-dir>/yolo`), a local
+or `http(s)://`/`hf://`/`ms://` `.pt`, a `*.yaml` architecture, or `ul://…`.
+`--model-sha256` checks the weights file (not possible for `*.yaml` or `ul://`).
+
+**`--data`**: an Ultralytics NDJSON export (`*.ndjson`, usually a signed URL), a
+`data.yaml`, or a directory. NDJSON is converted with Ultralytics'
+`convert_ndjson_to_yolo` into `<dataset-cache-dir>/ultralytics/` before training.
+
+**`--train-args`** (env `ULTRALYTICS_TRAIN_ARGS`): a JSON object, or
+Ultralytics' own `key=value` form. Keys are sorted into three groups before
+anything is downloaded:
+
+| group | keys | handling |
+|---|---|---|
+| accepted | `epochs imgsz batch lr0 lrf optimizer momentum weight_decay warmup_epochs cos_lr patience seed workers freeze dropout rect multi_scale single_cls fraction close_mosaic val save_period amp` | passed to `train()` |
+| accepted (augmentation) | `hsv_h hsv_s hsv_v degrees translate scale shear perspective flipud fliplr bgr mosaic mixup cutmix copy_paste copy_paste_mode auto_augment erasing` | passed to `train()` |
+| ignored | `device project name save_dir data model resume`, and any value that looks like a local path | dropped with a warning and an `ignored_args` event |
+| rejected | everything else | exit 3, listing every bad key |
+
+Ranges: `epochs` 1–1000, `batch` -1, a fraction in (0, 1) or 1–256, `imgsz`
+32–4096, `workers` 0–64, `fraction` in (0, 1]. Types are then checked against
+the installed Ultralytics with `get_cfg`. `dropout` is accepted, but it only
+affects classification heads. The first-level `--epochs`, `--imgsz`, `--batch`,
+`--workers`, `--amp`, `--optimizer`, `--close-mosaic` and `--learning-rate`
+(`lr0`) override the same keys in `--train-args`.
+
+**Reporting** is on when `--report-to-url` (`report_to.api_base_url`) is set. The
+token is read from the variable named by `report_to.token_env`
+(`REPORT_TO_TOKEN` by default), handed to Ultralytics as
+`ULTRALYTICS_API_KEY`, and never logged. `--report-to-model owner/project/model`
+names the run; with `--report-to-model-id` the events go to that existing
+model instead of creating one. The Platform callback sends `training_started`,
+one `epoch_end` per epoch with all metrics, console output, a checkpoint at most
+every 15 minutes, the final `best.pt`, and `training_complete`. The engine adds:
+
+- a `training_progress` heartbeat every `report_to.heartbeat_seconds` (600; 0
+  turns it off),
+- `training_failed` with the error code when training raises,
+- exit code 10 when training finished but the platform did not take the run, the
+  weights upload, or `training_complete`. Local outputs are kept.
+
+Platform calls use the SDK's retry with backoff; the SDK does not read
+`Retry-After`. Checkpoint cadence is the callback's fixed 15 minutes;
+`save_period` only controls local checkpoints. Ultralytics telemetry, hub sync
+and other loggers are turned off, and `YOLO_AUTOINSTALL=False`.
+
+**Expired dataset URLs**: with `--dataset-slug owner/dataset` (and optionally
+`--dataset-version N`), a 400/401/403 on the NDJSON download calls
+`GET /api/datasets/{owner}/{dataset}/export?v=N` for a fresh link and retries,
+at most twice. Image URLs inside the NDJSON are not re-signed. URLs are logged
+without their query string.
+
+**Outputs** (`--output`): Ultralytics' usual run directory (`weights/best.pt`,
+`weights/last.pt`, `results.csv`, `args.yaml`, plots) plus `summary.json`
+(`epochs_completed`, `best_epoch`, `best_fitness`, final `metrics`, `cancelled`,
+platform `model_id`/`run_id`). `--resume` continues from `weights/last.pt`.
+
+---
+
+## Integrity checks
+
+`--dataset-sha256` and `--model-sha256` take `sha256:<hex>` or bare hex. A local
+file is hashed in place. A downloaded file is hashed after download; on a
+mismatch the cache entry is deleted (a cached file is fetched once more first),
+and the run exits with code 5 and `IntegrityCheckFailed`.
+
+---
+
+## Progress events
+
+Every engine writes machine-readable lines to stdout through the
+`distill_run.events` logger, which stays at INFO even with `LOG_LEVEL=WARNING`:
+
+```text
+16:19:50 INFO distill_run.events: DISTILL_EVENT {"event": "stage", "stage": "downloading", "time": "2026-10-30T16:19:50.890Z"}
+```
+
+Take everything after `DISTILL_EVENT ` as one JSON object.
+`distill_run.events.parse(line)` does this.
+
+| `event` | fields | when |
+|---|---|---|
+| `stage` | `stage`: `downloading`, `converting`, `training`, `uploading` | once when each stage starts; `converting` and `uploading` only where the engine has them |
+| `progress` | `epoch` (1-based), `total_epochs`, `eta_seconds`, optional `fitness` | after each epoch (`yolo`, `ultralytics`) |
+| `ignored_args` | `args` | `ultralytics` dropped some `train_args` |
+| `exit` | `exit_code`, `code`, `stage` (the stage that was running, or `null`) | last line, once the arguments and config files have been merged; errors before that print only an `ERROR` line |
+
+All events carry `time` (UTC, ISO 8601). `code` is the error code (for example
+`IntegrityCheckFailed`, `ReportFailed`), or `null` on success.
 
 ---
 

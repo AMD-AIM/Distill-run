@@ -1,0 +1,5 @@
+# Ultralytics engine. Torch and torchvision come from the image.
+ultralytics>=8.4.190
+ultralytics-platform  # Platform client: metrics, uploads, dataset re-signing
+httpx
+aiohttp  # convert_ndjson_to_yolo downloads the images with it

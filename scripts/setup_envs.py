@@ -20,7 +20,7 @@ SOURCES = {
     "trl": ROOT / "third_party" / "trl",
     "easydistill": ROOT / "third_party" / "easydistill",
 }
-SUPPORTED_ENGINES = ("swift", "trl", "easydistill", "yolo")
+SUPPORTED_ENGINES = ("swift", "trl", "easydistill", "yolo", "ultralytics")
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None) -> None:

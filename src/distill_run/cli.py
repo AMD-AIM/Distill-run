@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from . import launcher, preflight
+from . import events, launcher, preflight
 from . import params as P
 from .config import (
     apply_config_overrides,
@@ -123,6 +123,7 @@ def main(argv: list[str] | None = None) -> int:
 
         return doctor_main(raw_argv[1:])
     args = build_parser().parse_args(raw_argv)
+    started = False
     try:
         list_models = bool(args.list_models) or _env_enabled("DISTILL_LIST_MODELS")
         list_datasets = bool(args.list_datasets) or _env_enabled("DISTILL_LIST_DATASETS")
@@ -155,20 +156,27 @@ def main(argv: list[str] | None = None) -> int:
         if launched is not None:
             return launched
         launcher.configure_single_device(ctx)
+        started = True
         result = execute(ctx)
         logger.info("run %s succeeded: %s", ctx.run_id, result.message or "done")
+        events.finish(int(ExitCode.OK))
         return int(ExitCode.OK)
     except DistillRunError as exc:
         logger.error("[%s] %s", exc.code, exc.message)
-        return int(exc.exit_code)
+        return _finish(started, exc)
     except KeyboardInterrupt:
         cancelled = CancelledError()
         logger.error("[%s] %s", cancelled.code, cancelled.message)
-        return int(cancelled.exit_code)
+        return _finish(started, cancelled)
     except Exception as exc:  # noqa: BLE001 - last resort, still exit cleanly
         logger.exception("unexpected failure")
-        wrapped = classify(exc)
-        return int(wrapped.exit_code)
+        return _finish(started, classify(exc))
+
+
+def _finish(started: bool, exc: DistillRunError) -> int:
+    if started:
+        events.finish(int(exc.exit_code), exc.code)
+    return int(exc.exit_code)
 
 
 def build_context(args: dict[str, Any]) -> RunContext:
@@ -220,12 +228,14 @@ def build_context(args: dict[str, Any]) -> RunContext:
 
 def execute(ctx: RunContext) -> RunResult:
     engine: Engine = registry.load(ctx.engine)
+    events.reset()
 
     preflight.check_writable(ctx.output_dir, "output")
     preflight.check_writable(ctx.work_dir, "work dir")
     preflight.check_space(ctx.output_dir)
 
     specs = engine.dataset_specs(ctx)
+    events.stage("downloading")
     for dest, spec in specs.items():
         ctx.datasets[dest] = resolve(spec, ctx.cache_dir)
 
@@ -235,6 +245,7 @@ def execute(ctx: RunContext) -> RunResult:
     if ctx.cancellation.requested:
         raise CancelledError("cancelled before the engine started")
 
+    events.stage("training")
     result = engine.run(ctx)
     for artifact in result.artifacts:
         logger.info("artifact: %s", artifact)

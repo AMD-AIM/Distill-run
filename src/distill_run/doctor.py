@@ -16,6 +16,7 @@ _ENGINES = {
     "trl": ("trl", "trl", "accelerate"),
     "easydistill": ("easydistill", "easydistill", None),
     "yolo": ("cv2", "opencv-python-headless", None),
+    "ultralytics": ("ultralytics", "ultralytics", None),
 }
 
 

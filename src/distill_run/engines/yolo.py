@@ -20,8 +20,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from .. import events, integrity
 from ..context import RunContext
-from ..errors import ConfigError, DataError, ModelFetchError, PreflightError, classify
+from ..errors import (
+    CancelledError,
+    ConfigError,
+    DataError,
+    ModelFetchError,
+    PreflightError,
+    classify,
+)
+from ..fetchers import redact_url
 from ..utils import HTTP_TIMEOUT, ensure_dir, http_session
 from .base import Engine, RunResult, config_dataset, make_spec, specs_from_params
 
@@ -74,6 +83,8 @@ class YoloEngine(Engine):
             TrainConfig.from_mapping(_train_options(section))
         except (TypeError, ValueError) as exc:
             raise ConfigError(f"yolo config: {exc}") from exc
+        self._model = resolve_model(ctx)
+        events.stage("converting")
         try:
             data = load_detection_data(
                 ctx.dataset("dataset").path,
@@ -88,7 +99,6 @@ class YoloEngine(Engine):
         for note in data.notes:
             logger.warning("dataset: %s", note)
         self._data = data
-        self._model = resolve_model(ctx)
 
     def run(self, ctx: RunContext) -> RunResult:
         # MIOpen's default find mode spends ~30 s per new conv shape (each autobatch
@@ -134,6 +144,9 @@ class YoloEngine(Engine):
         except Exception as exc:  # noqa: BLE001 - normalise OOM and friends
             logger.exception("yolo training failed")
             raise classify(exc) from exc
+        if summary["stopped"] == "cancelled":
+            raise CancelledError(f"cancelled at step {summary['global_step']}; "
+                                 f"weights so far are in {output / 'weights'}")
         artifacts = [Path(p) for p in (*summary["artifacts"], *summary.get("records", ()))]
         metrics = summary.get("final_metrics") or {}
         message = (
@@ -156,8 +169,9 @@ def resolve_model(ctx: RunContext) -> ModelChoice:
     spec = str(ctx.require("student")).strip()
     section = ctx.section("yolo")
     pretrained = bool(section.get("pretrained", False))
+    sha256 = ctx.param("model_sha256")
     cache = ensure_dir(Path(ctx.model_cache_dir) / "yolo")
-    base_url = section.get("weights_url") or os.environ.get("YOLO_WEIGHTS_URL") or OFFICIAL_WEIGHTS_URL
+    base_url = section.get("weights_url") or weights_base_url()
 
     bare = spec[:-3] if spec.lower().endswith(".pt") and "/" not in spec else spec
     parsed = parse_name(bare)
@@ -165,15 +179,25 @@ def resolve_model(ctx: RunContext) -> ModelChoice:
         family, scale = parsed
         if spec.lower().endswith(".pt") or pretrained:
             name = weights_filename(family, scale)
-            weights = _download(f"{base_url.rstrip('/')}/{name}", cache / name)
+            weights = download_verified(f"{base_url.rstrip('/')}/{name}", cache / name, sha256)
             return ModelChoice(family, scale, weights)
+        if sha256:
+            raise ConfigError(f"--model-sha256 given, but {spec} is a random initialisation")
         return ModelChoice(family, scale, None)
+    return _from_weights(fetch_weights(spec, cache, sha256))
 
+
+def weights_base_url() -> str:
+    return os.environ.get("YOLO_WEIGHTS_URL") or OFFICIAL_WEIGHTS_URL
+
+
+def fetch_weights(spec: str, cache: Path, sha256: str | None = None) -> Path:
+    """Local path for a weights URI or path, checked against ``sha256`` when given."""
     scheme = urlparse(spec).scheme.lower()
     if scheme in {"http", "https"}:
         name = Path(unquote(urlparse(spec).path)).name or "weights.pt"
-        path = _download(spec, cache / name)
-    elif scheme in {"hf", "ms", "modelscope"}:
+        return download_verified(spec, cache / name, sha256)
+    if scheme in {"hf", "ms", "modelscope"}:
         path = _hub_file(spec, cache)
     else:
         path = Path(spec[len("file://"):] if spec.startswith("file://") else spec).expanduser()
@@ -182,7 +206,20 @@ def resolve_model(ctx: RunContext) -> ModelChoice:
                 f"model not found: {spec}; use a name such as yolo26n / yolo11s.pt / yolov8m, "
                 "a local .pt, or an http(s)/hf/ms URI"
             )
-    return _from_weights(path)
+    if sha256:
+        integrity.verify(path, sha256, "model")
+    return path
+
+
+def download_verified(url: str, target: Path, sha256: str | None) -> Path:
+    path = _download(url, target)
+    if sha256 and not integrity.matches(path, sha256):
+        logger.warning("cached %s does not match --model-sha256; downloading again", path.name)
+        path.unlink(missing_ok=True)
+        path = _download(url, target)
+    if sha256:
+        integrity.verify(path, sha256, "model")
+    return path
 
 
 def _from_weights(path: Path) -> ModelChoice:
@@ -232,7 +269,8 @@ def _download(url: str, target: Path) -> Path:
         logger.info("weights cache hit %s", target)
         return target
     tmp = target.with_suffix(target.suffix + f".tmp-{os.getpid()}")
-    logger.info("downloading %s -> %s", url, target)
+    shown = redact_url(url)
+    logger.info("downloading %s -> %s", shown, target)
     try:
         with http_session().get(url, stream=True, timeout=HTTP_TIMEOUT) as resp:
             resp.raise_for_status()
@@ -241,10 +279,12 @@ def _download(url: str, target: Path) -> Path:
                     f.write(chunk)
     except Exception as exc:  # noqa: BLE001
         tmp.unlink(missing_ok=True)
-        raise ModelFetchError(f"failed to download {url}: {exc}") from exc
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        detail = f"HTTP {status}" if status else type(exc).__name__
+        raise ModelFetchError(f"failed to download {shown}: {detail}") from exc
     if tmp.stat().st_size < 100_000:
         tmp.unlink(missing_ok=True)
-        raise ModelFetchError(f"{url}: download too small to be a checkpoint")
+        raise ModelFetchError(f"{shown}: download too small to be a checkpoint")
     tmp.replace(target)
     return target
 

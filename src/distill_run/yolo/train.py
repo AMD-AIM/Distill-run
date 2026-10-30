@@ -27,6 +27,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from .. import events
 from .data import DetectionData, DetectionDataset, collate
 from .loss import build_loss, xywh2xyxy
 from .metrics import DetectionMetrics, end2end_filter, non_max_suppression
@@ -389,6 +390,8 @@ class Trainer:
                 step=global_step, fitness=fitness if metrics else None,
                 best_epoch=best_epoch, total_epochs=cfg.epochs,
             )
+            per_epoch = (time.time() - t_start) / (epoch + 1 - start_epoch)
+            events.progress(epoch + 1, cfg.epochs, per_epoch * (cfg.epochs - epoch - 1))
             self._save(last, model, ema, optimizer, scaler, epoch, best_fitness, global_step,
                        best_epoch)
             if improved:
