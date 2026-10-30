@@ -20,7 +20,7 @@ SOURCES = {
     "trl": ROOT / "third_party" / "trl",
     "easydistill": ROOT / "third_party" / "easydistill",
 }
-SUPPORTED_ENGINES = ("swift", "trl", "easydistill")
+SUPPORTED_ENGINES = ("swift", "trl", "easydistill", "yolo")
 
 
 def run(command: list[str], *, env: dict[str, str] | None = None) -> None:
@@ -140,7 +140,7 @@ def install_engine(name: str, python: Path, args: argparse.Namespace, constraint
         if not (source / "pyproject.toml").is_file():
             raise SystemExit(f"{name} submodule is missing: {source}")
         pip_install(python, ["-e", str(source)], args, constraints, no_deps=True)
-    else:
+    elif name in SOURCES:
         source = SOURCES[name]
         if not (source / "pyproject.toml").is_file():
             raise SystemExit(f"{name} submodule is missing: {source}")

@@ -4,7 +4,7 @@ Each engine owns one framework call. Production runs can be configured entirely
 with first-level CLI flags; `--config`, `--config-json`, and `--set` remain
 available for advanced framework fields.
 
-See [`cli-parameters.md`](cli-parameters.md) for all 61 parameters, defaults, and
+See [`cli-parameters.md`](cli-parameters.md) for all 69 parameters, defaults, and
 the engine compatibility matrix. An engine rejects parameters that belong to a
 different one instead of ignoring them.
 
@@ -235,6 +235,88 @@ few steps. An OOM exits 9, distinctly from a generic engine failure.
 
 **Ctrl-C** stops at the next step boundary and saves, rather than leaving a
 half-written adapter.
+
+---
+
+## `yolo` — object detection training
+
+A built-in PyTorch implementation of YOLOv5u, YOLOv8, YOLO11 and YOLO26 (scales
+`n s m l x`) in `src/distill_run/yolo/`. It needs torch, torchvision, OpenCV and
+safetensors, and does not use the Ultralytics package. YOLO26 trains its
+end-to-end one-to-one head next to the one-to-many head, and inference takes the
+top-k without NMS.
+
+```bash
+distill-run --engine yolo --model yolo26n.pt --data https://example.com/coco8.zip \
+  --epochs 100 --imgsz 640 --batch -1 --device 0 --output /output/yolo26n-exp
+```
+
+**`--model`**
+
+| value | meaning |
+|---|---|
+| `yolo26n`, `yolo11s`, `yolov8m`, `yolov5lu` | architecture, random init (`--pretrained` loads official weights) |
+| `yolo26n.pt` | official weights, downloaded once to `<model-cache-dir>/yolo` (`YOLO_WEIGHTS_URL` sets a mirror) |
+| `/path/w.pt` | an official checkpoint or one written by this engine |
+| `/path/run-dir` | an earlier `--output` (`config.json` + `best.safetensors`) |
+| `http(s)://…/w.pt`, `hf://org/repo/w.pt`, `ms://org/repo/w.pt` | downloaded weights |
+
+Official `.pt` files are read with a restricted unpickler: `ultralytics.*`
+classes become inert placeholders and only tensors are kept. If the dataset has
+a different class count, the class-dependent head layers are reinitialised.
+
+**`--data`**: a local path, `http(s)://`, `hf://` or `ms://`. The value can be a
+directory, a `data.yaml` or a zip/tar archive, which is unpacked once next to the
+cached download. The following layouts are detected:
+
+- a YOLO txt `data.yaml` (`path`, `train`, `val`, `names`), or `images/<split>` with
+  `labels/<split>`. Names come from `classes.txt`, or default to COCO-80 when the
+  directory name starts with `coco`.
+- COCO json: `annotations/instances_<split>.json` next to `images/<split>`, or
+  `data.yaml` split entries that point at `.json` files.
+- Ultralytics Platform NDJSON (`*.ndjson`, for example a signed export URL). The
+  first line holds `task` and `class_names`; each further line holds one image's
+  `file`, `split`, `url` and `annotations.boxes` (`[cls, cx, cy, w, h]`). Images are
+  downloaded with 32 threads into `<dataset-cache-dir>/ndjson/<name>-<hash>/`.
+  The hash ignores URL query strings, so a re-signed export of the same data reuses
+  the earlier download. Without a `val` split, a seeded 10% of `train` becomes
+  `val`, as on the Platform. Only `task: detect` is accepted. If any image fails to
+  download, the run fails with exit code 5.
+
+If there is no `val` split, the engine validates on the training images. Set
+`yolo.val_fraction` to hold out a fraction of them instead.
+
+**Flags**: `--epochs`, `--imgsz`, `--batch` (`-1` sizes the batch to about 60% of
+GPU memory), `--workers`, `--pretrained`, `--amp`/`--no-amp`, `--optimizer`
+(`auto`, `SGD`, `Adam`, `AdamW`), `--close-mosaic`, `--learning-rate`,
+`--max-steps` (stops after N batches, useful for smoke tests), `--logging-steps`,
+`--resume` and `--device`. The engine sets `MIOPEN_FIND_MODE=FAST` unless it
+is already set (only ROCm reads it): MIOpen's default mode spends about 30 s
+tuning each new convolution shape. Every other hyper-parameter (loss gains, warmup,
+augmentation) is under `yolo.*`; see `distill-run --engine yolo
+--show-default-config`.
+
+**Outputs** (`--output`): `weights/last.pt` holds the resumable state;
+`weights/best.pt` holds the EMA weights with the best fitness
+(`0.1·mAP50 + 0.9·mAP50-95`). The run also writes `best.safetensors` and
+`config.json` for reloading, and `summary.json` (final metrics, `best_epoch`,
+peak memory).
+
+Training curves are written once per epoch:
+
+- `results.csv` uses the Ultralytics column names (`epoch`, `time`,
+  `train/{box,cls,dfl}_loss`, `metrics/{precision,recall,mAP50,mAP50-95}(B)`,
+  `val/{box,cls,dfl}_loss`, `lr/pg0..2`), so the Ultralytics Platform and its
+  plotting tools read it unchanged. A cell is empty when an epoch was not
+  validated.
+- `metrics.jsonl` holds the same values as one JSON object per epoch, plus
+  `step`, `fitness`, `best_epoch` and `total_epochs`. Read it to follow a run
+  while it trains.
+- `results.png` plots the ten loss and metric curves when matplotlib is
+  installed.
+
+`--resume` drops the rows it is about to train again. Ctrl-C stops at the next
+batch and still writes all of these files.
 
 ---
 

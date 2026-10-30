@@ -1,6 +1,6 @@
 # CLI 参数分层与兼容矩阵
 
-`distill-run` 目前提供 61 个一级参数。参数不是所有引擎通用：解析后会根据
+`distill-run` 目前提供 69 个一级参数。参数不是所有引擎通用：解析后会根据
 `--engine` 校验，不属于当前引擎的参数会直接报错，不会被静默忽略。
 
 参数分为六层：
@@ -116,6 +116,32 @@ TRL 同时接受教师生成参数表中的 `--temperature`。
 | `--accelerate-config` | path | 无 | — | — | ✓ | — | 自定义 Accelerate 配置，覆盖 strategy |
 | `--main-process-port` | int | `29500` | — | ✓ | ✓ | ✓ | 分布式 rendezvous 端口 |
 | `--device` | int | `0` | — | ✓ | ✓ | ✓ | 单进程使用的逻辑 GPU |
+
+## YOLO 检测训练参数（8）
+
+`--engine yolo` 不在上面的矩阵里。它接受全局运行参数（`--model-revision` 除外，
+数据集的 format、subset、split 和抽样参数会被忽略），以及 `--student`/`--model`、
+`--dataset`/`--data`、`--resume`、`--device`、`--model-cache-dir`、`--max-steps`、
+`--learning-rate` 和 `--logging-steps`。后三个分别映射到 `yolo.max_steps`、
+`yolo.lr0` 和 `yolo.log_interval`。专属参数如下：
+
+| 参数 | 类型 | 默认值 | 环境变量 | 说明 |
+| --- | --- | --- | --- | --- |
+| `--epochs` | int | `100` | `YOLO_EPOCHS` | 训练轮数 |
+| `--imgsz` | int | `640` | `YOLO_IMGSZ` | 训练与验证的输入尺寸（32 的倍数） |
+| `--batch` | int | `16` | `YOLO_BATCH` | 批量；`-1` 按约 60% 显存自动估算 |
+| `--workers` | int | `8` | `YOLO_WORKERS` | DataLoader 进程数 |
+| `--pretrained` / `--no-pretrained` | bool | false | `YOLO_PRETRAINED` | 名称型模型加载官方权重；`.pt` 结尾的名称自动为 true |
+| `--amp` / `--no-amp` | bool | true | `YOLO_AMP` | 混合精度（前向 fp16，损失 fp32） |
+| `--optimizer` | string | `auto` | `YOLO_OPTIMIZER` | `auto`、`SGD`、`Adam` 或 `AdamW` |
+| `--close-mosaic` | int | `10` | `YOLO_CLOSE_MOSAIC` | 最后 N 个 epoch 关闭 mosaic |
+
+```bash
+distill-run --engine yolo --model yolo26n.pt --data /data/coco8 \
+  --epochs 100 --imgsz 640 --batch -1 --device 0 --output /output/yolo26n
+```
+
+模型与数据的取值方式见 [`engines.md`](engines.md#yolo--object-detection-training)。
 
 ## 配置优先级
 
