@@ -131,10 +131,19 @@ Other knobs: `IMAGE_REPO`, `BASE_IMAGE`, `ENGINES`, `PIP_INDEX_URL` (default
 
 ## Pull
 
+The `radeon` namespace on CCR allows anonymous pulls, so no `docker login` is needed:
+
 ```bash
-docker login ccr.ccs.tencentyun.com
 docker pull ccr.ccs.tencentyun.com/radeon/distill-run:<tag>
 ```
+
+Deployments should reference the digest printed by `scripts/build-image.sh` (also in
+`build/image-digests.tsv` on the build host), e.g.
+`ccr.ccs.tencentyun.com/radeon/distill-run@sha256:<digest>`.
+
+| Tag | Digest | `PARAMS_SHA256` |
+|---|---|---|
+| `d15c0acb08bb-gfx1100` | `sha256:471e8b6a1e10e66e7f50b67bce4ede360ad5166e9fb02d32ddafcca0fe1d42c1` | `eb74f6f84f6112d371049f99e9964c27c49fc76bb21c6b07b39b33ec4d2e046e` |
 
 ## Smoke
 
