@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import http.server
+import io
 import json
+import logging
 import threading
 from pathlib import Path
 
 import pytest
 
+from distill_run import redact
 from distill_run.engines.ultralytics import ReportTarget
 from distill_run.errors import ConfigError
 from distill_run.platform_rest import (
@@ -197,3 +200,38 @@ def test_rest_protocol_needs_a_model_id(monkeypatch):
     assert (target.rest.metrics_every_epochs, target.rest.checkpoint_every_epochs) == (2, 5)
     with pytest.raises(ConfigError, match="protocol"):
         ReportTarget.from_config({**section, "protocol": "ftp"})
+
+
+def test_token_from_a_file_with_a_trailing_newline_is_stripped(monkeypatch):
+    monkeypatch.setenv("REPORT_TO_TOKEN", "ul_test_token_123\n")
+    target = ReportTarget.from_config({"api_base_url": "http://p", "model": "acme-vision/p/m"})
+    assert target.token == "ul_test_token_123"
+
+
+@pytest.mark.parametrize("token", ["ul_a\nul_b", "ul a", "ul_\x1ba"])
+def test_token_with_inner_whitespace_or_control_characters_is_rejected(monkeypatch, token):
+    monkeypatch.setenv("REPORT_TO_TOKEN", token)
+    with pytest.raises(ConfigError, match="REPORT_TO_TOKEN") as raised:
+        ReportTarget.from_config({"api_base_url": "http://p", "model": "acme-vision/p/m"})
+    assert token not in str(raised.value)
+
+
+def test_log_filter_masks_the_token_in_messages_and_tracebacks(monkeypatch):
+    monkeypatch.setenv("REPORT_TO_TOKEN", "ul_secret_tok_9")
+    ReportTarget.from_config({"api_base_url": "http://p", "model": "acme-vision/p/m"})
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    logger = logging.getLogger("ultralytics-test-leak")
+    logger.handlers = [handler]
+    logger.propagate = False
+    redact.protect(logger)
+    logger.warning("Failed to send training_started: Illegal header value %r",
+                   b"Bearer ul_secret_tok_9")
+    try:
+        raise ValueError("Invalid header value b'Bearer ul_secret_tok_9'")
+    except ValueError:
+        logger.exception("unexpected failure")
+    text = stream.getvalue()
+    assert "ul_secret_tok_9" not in text
+    assert "Illegal header value b'Bearer ***'" in text
+    assert "ValueError: Invalid header value b'Bearer ***'" in text

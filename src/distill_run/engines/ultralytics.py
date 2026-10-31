@@ -35,7 +35,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from .. import events
+from .. import events, redact
 from ..context import RunContext
 from ..errors import (
     CancelledError,
@@ -142,9 +142,12 @@ class ReportTarget:
         if not base_url:
             return None
         token_env = section.get("token_env") or "REPORT_TO_TOKEN"
-        token = os.environ.get(token_env, "")
+        token = os.environ.get(token_env, "").strip()
         if not token:
             raise ConfigError(f"report_to.api_base_url is set but ${token_env} is empty")
+        if any(ch.isspace() or not ch.isprintable() for ch in token):
+            raise ConfigError(f"${token_env} contains whitespace or control characters")
+        redact.register(token)
         parts = str(section.get("model") or "").strip("/").split("/")
         if len(parts) != 3:
             raise ConfigError("report_to.model (--report-to-model) must be owner/project/model")
@@ -285,7 +288,7 @@ def _setup_ultralytics(ctx: RunContext, report: ReportTarget | None) -> None:
     else:
         os.environ.pop("ULTRALYTICS_API_KEY", None)
     try:
-        from ultralytics.utils import SETTINGS
+        from ultralytics.utils import LOGGER, SETTINGS
     except ImportError as exc:
         raise PreflightError(
             f"ultralytics engine needs the ultralytics package: {exc}; "
@@ -296,6 +299,7 @@ def _setup_ultralytics(ctx: RunContext, report: ReportTarget | None) -> None:
             import ultralytics_platform  # noqa: F401
         except ImportError as exc:
             raise PreflightError(f"reporting needs ultralytics-platform and httpx: {exc}") from exc
+    redact.protect(LOGGER, logging.getLogger("distill_run"))
     weights = ensure_dir(Path(ctx.model_cache_dir) / "yolo")
     SETTINGS.update({
         "weights_dir": str(weights),

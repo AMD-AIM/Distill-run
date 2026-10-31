@@ -20,3 +20,14 @@ tensorboard
 tiktoken
 transformers>=5.0
 transformers-stream-generator
+# Declared by ms-swift 4.5.2 but skipped by --no-deps; swift.arguments imports
+# pydantic through swift.infer_engine. Left out on purpose: trl (pinned
+# separately), gradio (web UI only), cpm-kernels (CUDA only).
+aiohttp
+einops
+fastapi
+openai
+oss2
+pydantic>=2
+uvicorn
+zstandard
