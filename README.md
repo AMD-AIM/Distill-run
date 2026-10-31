@@ -226,3 +226,5 @@ profile and exact submodule commits are recorded in
 
 `pip install -e .` remains valid for installing only the lightweight core. It
 does not perform network or Git operations.
+
+See [docs/container-image.md](docs/container-image.md) for the container image.
