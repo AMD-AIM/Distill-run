@@ -3,17 +3,6 @@ FROM ${BASE_IMAGE}
 ARG BASE_IMAGE
 ARG ENGINES=swift,trl,easydistill,yolo,ultralytics
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
-ARG VCS_REF=unknown
-ARG IMAGE_VERSION=dev
-ARG PARAMS_SHA256=unknown
-LABEL org.opencontainers.image.title="distill-run" \
-      org.opencontainers.image.source="https://github.com/AMD-AIM/Distill-run" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.version="${IMAGE_VERSION}" \
-      org.opencontainers.image.base.name="${BASE_IMAGE}" \
-      io.amd.rocm.arch="gfx1100" \
-      distill-run.gpu-mode="single-gpu" \
-      distill-run.params-sha256="${PARAMS_SHA256}"
 # opencv-python (pulled in by ultralytics) needs libGL; setuptools>=77.0.3 is required by the pinned TRL
 RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
@@ -28,5 +17,17 @@ ENV DISTILL_RUN_ENVS_ROOT=/opt/distill-run/.venvs \
     HF_ENDPOINT=https://hf-mirror.com \
     HF_HUB_DISABLE_XET=1 \
     PYTHONUNBUFFERED=1
+# These change on every commit; declared before a RUN they would invalidate its cache.
+ARG VCS_REF=unknown
+ARG IMAGE_VERSION=dev
+ARG PARAMS_SHA256=unknown
+LABEL org.opencontainers.image.title="distill-run" \
+      org.opencontainers.image.source="https://github.com/AMD-AIM/Distill-run" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.base.name="${BASE_IMAGE}" \
+      io.amd.rocm.arch="gfx1100" \
+      distill-run.gpu-mode="single-gpu" \
+      distill-run.params-sha256="${PARAMS_SHA256}"
 ENTRYPOINT ["distill-run"]
 CMD ["--help"]

@@ -59,6 +59,15 @@ def test_dockerfile_runtime_contract(dockerfile):
         assert text in dockerfile
 
 
+def test_per_commit_args_come_after_every_run(dockerfile):
+    lines = dockerfile.splitlines()
+    last_run = max(i for i, line in enumerate(lines) if line.startswith("RUN "))
+    for name in ("VCS_REF", "IMAGE_VERSION", "PARAMS_SHA256"):
+        declared = [i for i, line in enumerate(lines) if line.startswith(f"ARG {name}")]
+        assert declared
+        assert min(declared) > last_run
+
+
 def test_dockerignore_keeps_submodule_sources():
     lines = (REPO / ".dockerignore").read_text(encoding="utf-8").splitlines()
     for pattern in ("**/.git", ".venv", ".venvs", ".distill", "build", "work", "output"):
