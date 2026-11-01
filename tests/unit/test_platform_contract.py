@@ -248,11 +248,23 @@ def test_report_problem_names_what_did_not_reach_the_platform(tmp_path: Path, mo
     assert _hooks(tmp_path).report_problem(trainer) is None
 
 
+def test_report_cadence_flags_reach_report_to(run_dirs):
+    work, output = run_dirs
+    base = {"engine": "ultralytics", "output": str(output), "work_dir": str(work),
+            "student": "yolo26n.pt", "dataset": "x.ndjson"}
+    report_to = build_context(base).config["report_to"]
+    assert (report_to["metrics_every_epochs"], report_to["checkpoint_every_epochs"]) == (1, 10)
+    report_to = build_context({**base, "report_to_metrics_every_epochs": 5,
+                               "report_to_checkpoint_every_epochs": 0}).config["report_to"]
+    assert (report_to["metrics_every_epochs"], report_to["checkpoint_every_epochs"]) == (5, 0)
+
+
 def test_ultralytics_engine_accepts_its_flags():
     from distill_run import params as P
 
     accepted = {p.dest for p in P.params_for("ultralytics")}
     assert {"train_args", "epochs", "student", "dataset", "model_sha256", "report_to_url",
-            "dataset_slug", "dataset_sha256", "resume", "device"} <= accepted
+            "dataset_slug", "dataset_sha256", "resume", "device",
+            "report_to_metrics_every_epochs", "report_to_checkpoint_every_epochs"} <= accepted
     assert "max_steps" not in accepted and "logging_steps" not in accepted
     assert json.loads(json.dumps(sorted(accepted)))

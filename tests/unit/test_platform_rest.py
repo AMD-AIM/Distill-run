@@ -235,3 +235,16 @@ def test_log_filter_masks_the_token_in_messages_and_tracebacks(monkeypatch):
     assert "ul_secret_tok_9" not in text
     assert "Illegal header value b'Bearer ***'" in text
     assert "ValueError: Invalid header value b'Bearer ***'" in text
+
+
+def test_report_cadence_defaults_zero_and_bad_values(monkeypatch):
+    monkeypatch.setenv("REPORT_TO_TOKEN", "t")
+    section = {"api_base_url": "http://p", "model": "acme-vision/p/m"}
+    target = ReportTarget.from_config(section)
+    assert (target.rest.metrics_every_epochs, target.rest.checkpoint_every_epochs) == (1, 10)
+    off = ReportTarget.from_config({**section, "checkpoint_every_epochs": 0})
+    assert off.rest.checkpoint_every_epochs == 0
+    for bad in ({"metrics_every_epochs": 0}, {"checkpoint_every_epochs": -1},
+                {"metrics_every_epochs": "abc"}):
+        with pytest.raises(ConfigError):
+            ReportTarget.from_config({**section, **bad})

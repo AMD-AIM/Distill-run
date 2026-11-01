@@ -392,8 +392,8 @@ Webhook calls use the SDK's retry with backoff; the SDK does not read
 | when | calls |
 |---|---|
 | training starts | `PATCH /api/models/{owner}/{project}/{model}` with `status: training`; 400/401/403/404/409 stops the run with exit 10 before the first epoch |
-| every `report_to.metrics_every_epochs` (1) | `PATCH` with `metrics` (`mAP50`, `mAP50-95`, `precision`, `recall`), `epochs`, `bestEpoch`, `bestFitness`, `datasetSlug`, `metadata` |
-| every `report_to.checkpoint_every_epochs` (10; 0 turns it off) | upload a copy of `last.pt` as `last.pt` |
+| every `--report-to-metrics-every-epochs` (`report_to.metrics_every_epochs`, 1) | `PATCH` with `metrics` (`mAP50`, `mAP50-95`, `precision`, `recall`), `epochs`, `bestEpoch`, `bestFitness`, `datasetSlug`, `metadata` |
+| every `--report-to-checkpoint-every-epochs` (`report_to.checkpoint_every_epochs`, 10; 0 turns it off), except the last epoch | upload a copy of `last.pt` as `last.pt` |
 | every `report_to.heartbeat_seconds` | `PATCH` with `status` and `metadata` only |
 | training ends | upload `best.pt`, then `PATCH` with `status: completed` (or `cancelled`) and `trainResults` (the `summary.json` content) |
 | training raises | `PATCH` with `status: failed` and `trainingError` |

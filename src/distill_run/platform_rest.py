@@ -77,8 +77,8 @@ class RestConfig:
         return cls(
             paths={**DEFAULT_PATHS, **(rest.get("paths") or {})},
             statuses={**DEFAULT_STATUSES, **(rest.get("statuses") or {})},
-            metrics_every_epochs=int(section.get("metrics_every_epochs") or 1),
-            checkpoint_every_epochs=int(section.get("checkpoint_every_epochs") or 0),
+            metrics_every_epochs=_as_int(section.get("metrics_every_epochs"), 1),
+            checkpoint_every_epochs=_as_int(section.get("checkpoint_every_epochs"), 10),
             train_results_field=str(rest.get("train_results_field", "trainResults") or ""),
             upload_md5=bool(rest.get("upload_md5", False)),
             metadata=dict(section.get("metadata") or {}),
@@ -86,6 +86,12 @@ class RestConfig:
             max_attempts=max(1, int(rest.get("max_attempts", 5))),
             max_retry_wait=float(rest.get("max_retry_wait", 300)),
         )
+
+
+def _as_int(value: Any, default: int) -> int:
+    if value is None or value == "":
+        return default
+    return int(value)
 
 
 class RestClient:

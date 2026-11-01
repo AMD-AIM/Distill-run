@@ -119,7 +119,7 @@ ULTRALYTICS = {
         "token_env": "REPORT_TO_TOKEN",
         "protocol": "webhook",
         "heartbeat_seconds": 600,
-        # protocol: rest only; webhook uploads a checkpoint at most every 15 minutes.
+        # Both protocols; webhook no longer uses the callback's 15-minute checkpoint limit.
         "metrics_every_epochs": 1,
         "checkpoint_every_epochs": 10,
         "metadata": {},

@@ -168,7 +168,10 @@ class ReportTarget:
         if protocol == "rest" and not model_id:
             raise ConfigError("report_to.protocol=rest needs --report-to-model-id "
                               "(the assetId weights are uploaded to)")
-        rest = RestConfig.from_section(section)
+        try:
+            rest = RestConfig.from_section(section)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"invalid report_to settings: {exc}") from exc
         if rest.metrics_every_epochs < 1 or rest.checkpoint_every_epochs < 0:
             raise ConfigError("report_to.metrics_every_epochs must be >= 1 and "
                               "report_to.checkpoint_every_epochs >= 0")
