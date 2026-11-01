@@ -4,7 +4,8 @@ Used by the ``ultralytics`` engine when ``report_to.protocol`` is ``rest``:
 
 - weights: ``POST signed-url`` -> ``PUT uploadUrl`` with every returned header ->
   ``POST complete``; a 412 on the PUT starts again from the signed URL,
-- results: ``PATCH /api/models/{owner}/{project}/{model}``,
+- results: ``PATCH /api/models/{owner}/{project}/{model}``; per-epoch metrics go
+  into ``trainResults`` (the PATCH body has no ``metrics`` field),
 - dataset re-signing: ``GET /api/datasets/{owner}/{dataset}/export?v=N``.
 
 Every call retries 429 after ``Retry-After`` (or ``X-RateLimit-Reset``) and
@@ -15,11 +16,11 @@ with signatures.
 
 from __future__ import annotations
 
-import base64
 import email.utils
 import hashlib
 import json
 import logging
+import math
 import time
 import urllib.error
 import urllib.parse
@@ -27,6 +28,8 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+
+from .events import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +40,7 @@ DEFAULT_PATHS = {
     "dataset_export": "/api/datasets/{owner}/{dataset}/export",
 }
 DEFAULT_STATUSES = {
-    "running": "training",
+    "running": "running",
     "completed": "completed",
     "failed": "failed",
     "cancelled": "cancelled",
@@ -248,20 +251,18 @@ class RestReporter:
                 raise
             body: dict[str, Any] = {"sessionId": signed["sessionId"]}
             if self.config.upload_md5:
-                body["md5"] = _md5_base64(path)
+                body["md5"] = _md5_hex(path)
             self.client.request("POST", paths["complete"], body)
             logger.info("uploaded %s (%d bytes)", name, size)
             return {"filename": name, "bytes": size, "sessionId": signed["sessionId"]}
         raise AssertionError("unreachable")
 
-    def patch(self, status_key: str, *, metrics: dict[str, Any] | None = None,
-              epochs: int | None = None, best_epoch: int | None = None,
-              best_fitness: float | None = None, error: str | None = None,
-              train_results: dict[str, Any] | None = None,
+    def patch(self, status_key: str, *, epochs: int | None = None,
+              best_epoch: int | None = None, best_fitness: float | None = None,
+              error: str | None = None, error_code: str | None = None,
+              train_results: list[dict[str, Any]] | None = None,
               metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         body: dict[str, Any] = {"status": self.config.statuses[status_key]}
-        if metrics:
-            body["metrics"] = platform_metrics(metrics)
         if epochs is not None:
             body["epochs"] = epochs
         if best_epoch is not None:
@@ -271,7 +272,10 @@ class RestReporter:
         if self.dataset_slug:
             body["datasetSlug"] = self.dataset_slug
         if error:
-            body["trainingError"] = error[:2000]
+            training_error = {"message": error[:1000], "timestamp": utc_now()}
+            if error_code:
+                training_error["code"] = error_code[:50]
+            body["trainingError"] = training_error
         if train_results is not None and self.config.train_results_field:
             body[self.config.train_results_field] = train_results
         body["metadata"] = {**self.config.metadata, **(metadata or {})}
@@ -288,9 +292,18 @@ def platform_metrics(metrics: dict[str, Any]) -> dict[str, float]:
     return out
 
 
-def _md5_base64(path: Path) -> str:
+def train_result(epoch: int, fitness: float | None, metrics: dict[str, Any]) -> dict[str, Any]:
+    """One ``trainResults`` item, the shape the Platform stores for webhook ``epoch_end``."""
+    item: dict[str, Any] = {"epoch": epoch}
+    if fitness is not None and math.isfinite(float(fitness)):
+        item["fitness"] = float(fitness)
+    item.update(metrics=platform_metrics(metrics), system={}, timestamp=utc_now())
+    return item
+
+
+def _md5_hex(path: Path) -> str:
     digest = hashlib.md5(usedforsecurity=False)
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1 << 20), b""):
             digest.update(chunk)
-    return base64.b64encode(digest.digest()).decode()
+    return digest.hexdigest()

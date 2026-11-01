@@ -7,6 +7,7 @@ import http.server
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from distill_run.dataset import DatasetSpec, resolve
 from distill_run.engines.ultralytics import ReportTarget, check_train_args
 from distill_run.errors import (
     ConfigError,
+    DataError,
     DatasetFetchError,
     ExitCode,
     IntegrityError,
@@ -412,6 +414,51 @@ def test_rest_reports_every_n_epochs(tmp_path: Path):
     hooks._queue.shutdown(wait=True)
     assert [s for s in sent if s[0] == "patch"] == [("patch", 2), ("patch", 4)]
     assert [s for s in sent if s[0] == "upload"] == [("upload", "last.pt"), ("upload", "last.pt")]
+
+
+def _rest_hooks(tmp_path: Path, every: int):
+    from distill_run.platform_rest import RestConfig
+
+    sent: list[tuple[str, dict]] = []
+    hooks = _hooks(tmp_path)
+    hooks.ctx.run_id = "r"
+    hooks.rest = SimpleNamespace(
+        config=RestConfig(metrics_every_epochs=every, checkpoint_every_epochs=0),
+        patch=lambda status, **fields: sent.append((status, fields)),
+        upload=lambda path, name=None: {"filename": name or path.name})
+    return hooks, sent
+
+
+def test_rest_metrics_go_into_train_results_and_the_final_patch_sends_the_array(tmp_path: Path):
+    hooks, sent = _rest_hooks(tmp_path, 2)
+    best = tmp_path / "best.pt"
+    best.write_bytes(b"w")
+    trainer = SimpleNamespace(epochs=5, start_epoch=0, train_time_start=time.time(), fitness=0.5,
+                              metrics={"metrics/mAP50(B)": 0.8, "val/box_loss": 1.0},
+                              best_fitness=0.5, best=str(best), last=str(best),
+                              final_eval=lambda: None)
+    hooks.pretrain_start(trainer)
+    for epoch in range(5):
+        trainer.epoch = epoch
+        hooks.fit_epoch_end(trainer)
+    hooks._queue.shutdown(wait=True)
+    assert all("metrics" not in fields for _, fields in sent)
+    assert [[r["epoch"] for r in fields["train_results"]] for _, fields in sent] == [[2], [2, 4]]
+    assert sent[0][1]["train_results"][0]["metrics"] == {"mAP50": 0.8}
+    hooks._queue = ThreadPoolExecutor(max_workers=1)
+    assert hooks._rest_finish(trainer) is None
+    status, fields = sent[-1]
+    assert status == "completed" and isinstance(fields["train_results"], list)
+    assert [r["epoch"] for r in fields["train_results"]] == [2, 4, 5]
+
+
+def test_rest_failure_sends_code_and_message(tmp_path: Path):
+    hooks, sent = _rest_hooks(tmp_path, 1)
+    hooks.failed(None, DataError("labels are broken"))
+    hooks._queue.shutdown(wait=True)
+    status, fields = sent[-1]
+    assert status == "failed"
+    assert (fields["error_code"], fields["error"]) == ("DataInvalid", "labels are broken")
 
 
 def test_report_problem_names_what_did_not_reach_the_platform(tmp_path: Path, monkeypatch):

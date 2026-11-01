@@ -399,12 +399,12 @@ Webhook calls use the SDK's retry with backoff; the SDK does not read
 
 | when | calls |
 |---|---|
-| training starts | `PATCH /api/models/{owner}/{project}/{model}` with `status: training`; 400/401/403/404/409 stops the run with exit 10 before the first epoch |
-| every `--report-to-metrics-every-epochs` (`report_to.metrics_every_epochs`, 1) | `PATCH` with `metrics` (`mAP50`, `mAP50-95`, `precision`, `recall`), `epochs`, `bestEpoch`, `bestFitness`, `datasetSlug`, `metadata` |
+| training starts | `PATCH /api/models/{owner}/{project}/{model}` with `status: running`; 400/401/403/404/409 stops the run with exit 10 before the first epoch |
+| every `--report-to-metrics-every-epochs` (`report_to.metrics_every_epochs`, 1) | `PATCH` with `trainResults` (every reported epoch so far, each `{epoch, fitness, metrics: {mAP50, mAP50-95, precision, recall}, system: {}, timestamp}`), `epochs`, `bestEpoch`, `bestFitness`, `datasetSlug`, `metadata`; the PATCH body has no `metrics` field |
 | every `--report-to-checkpoint-every-epochs` (`report_to.checkpoint_every_epochs`, 10; 0 turns it off), except the last epoch | upload a copy of `last.pt` as `last.pt` |
 | every `report_to.heartbeat_seconds` | `PATCH` with `status` and `metadata` only |
-| training ends | upload `best.pt`, then `PATCH` with `status: completed` (or `cancelled`) and `trainResults` (the `summary.json` content) |
-| training raises | `PATCH` with `status: failed` and `trainingError` |
+| training ends | upload `best.pt`, then `PATCH` with `status: completed` (or `cancelled`) and the same `trainResults` array, plus the last epoch if it was not reported |
+| training raises | `PATCH` with `status: failed` and `trainingError: {message (≤1000), code (≤50), timestamp}` |
 
 An upload is `POST /api/upload/signed-url` (`assetType: models`, `assetId`,
 `filename`, `contentType`, `totalBytes`), then `PUT uploadUrl` with every
@@ -417,8 +417,8 @@ only log a warning when they fail. A failed final upload or final `PATCH` exits
 10. `PATCH` never sends `name` or `projectId`.
 
 The fields that are not settled yet are configurable under `report_to`:
-`rest.paths`, `rest.statuses` (`training`, `completed`, `failed`, `cancelled`),
-`rest.train_results_field` (empty string drops it), `rest.upload_md5` (base64
+`rest.paths`, `rest.statuses` (`running`, `completed`, `failed`, `cancelled`),
+`rest.train_results_field` (empty string drops it), `rest.upload_md5` (lowercase hex
 MD5 on `complete`), and `metadata` (merged into every `PATCH`, for example
 `--set report_to.metadata.session_id=sess_7f3a`).
 

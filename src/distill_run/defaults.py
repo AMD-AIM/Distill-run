@@ -130,7 +130,7 @@ ULTRALYTICS = {
                 "model": "/api/models/{owner}/{project}/{model}",
                 "dataset_export": "/api/datasets/{owner}/{dataset}/export",
             },
-            "statuses": {"running": "training", "completed": "completed",
+            "statuses": {"running": "running", "completed": "completed",
                          "failed": "failed", "cancelled": "cancelled"},
             "train_results_field": "trainResults",
             "upload_md5": False,

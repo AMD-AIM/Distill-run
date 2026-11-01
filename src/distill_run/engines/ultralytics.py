@@ -54,6 +54,7 @@ from ..platform_rest import (
     RestClient,
     RestConfig,
     RestReporter,
+    train_result,
 )
 from ..platform_rest import resign_dataset_url as _resign
 from ..utils import atomic_write_json, ensure_dir
@@ -161,6 +162,8 @@ class ReportTarget:
         slug = section.get("dataset_slug")
         if slug and len(str(slug).strip("/").split("/")) != 2:
             raise ConfigError("--dataset-slug must be owner/dataset")
+        if slug and len(str(slug).strip("/")) > 100:
+            raise ConfigError("--dataset-slug is longer than 100 characters")
         version = section.get("dataset_version")
         protocol = str(section.get("protocol") or "webhook").lower()
         if protocol not in PROTOCOLS:
@@ -400,6 +403,7 @@ class _Hooks:
         self._final_eval = False
         self._queue = ThreadPoolExecutor(max_workers=1, thread_name_prefix="report")
         self._checkpoint: Future | None = None
+        self._train_results: list[dict[str, Any]] = []
 
     @contextlib.contextmanager
     def watch_platform(self):
@@ -429,7 +433,7 @@ class _Hooks:
     def finish(self, trainer, summary: dict[str, Any]) -> str | None:
         """Send the final results; return what did not reach the platform, if anything."""
         if self.rest:
-            return self._rest_finish(trainer, summary)
+            return self._rest_finish(trainer)
         return self.report_problem(trainer)
 
     def report_problem(self, trainer) -> str | None:
@@ -527,8 +531,10 @@ class _Hooks:
         events.progress(trainer.epoch + 1, trainer.epochs, per_epoch * (trainer.epochs - trainer.epoch - 1),
                         fitness=None if fitness is None or not math.isfinite(fitness) else round(fitness, 5))
         if self.rest and report_due(self._last_epoch, self.rest.config.metrics_every_epochs):
-            fields = self._results(trainer)
-            self._queue.submit(self._quietly, "metrics", self.rest.patch, "running", **fields)
+            item = train_result(self._last_epoch, fitness, trainer.metrics or {})
+            self._train_results.append(item)
+            self._queue.submit(self._quietly, "metrics", self.rest.patch, "running",
+                               train_results=list(self._train_results), **self._results(trainer))
 
     def model_save(self, trainer) -> None:
         every = self.rest.config.checkpoint_every_epochs if self.rest else 0
@@ -552,7 +558,7 @@ class _Hooks:
         if getattr(trainer, "platform", None) or self.rest:
             events.stage("uploading")
 
-    def _rest_finish(self, trainer, summary: dict[str, Any]) -> str | None:
+    def _rest_finish(self, trainer) -> str | None:
         self._queue.shutdown(wait=True)
         (self.output / "weights" / "checkpoint-upload.pt").unlink(missing_ok=True)
         problems = []
@@ -564,8 +570,13 @@ class _Hooks:
                 logger.error("uploading %s failed: %s", weights.name, exc)
                 problems.append(f"uploading {weights.name} to the platform failed")
         status = "cancelled" if self.ctx.cancellation.requested else "completed"
+        fields = self._results(trainer)
+        if not self._train_results or self._train_results[-1]["epoch"] < fields["epochs"]:
+            item = train_result(fields["epochs"], getattr(trainer, "fitness", None),
+                                trainer.metrics or {})
+            self._train_results.append(item)
         try:
-            self.rest.patch(status, **self._results(trainer), train_results=summary)
+            self.rest.patch(status, train_results=list(self._train_results), **fields)
         except PlatformHTTPError as exc:
             logger.error("writing the results failed: %s", exc)
             problems.append("the platform did not accept the results")
@@ -575,8 +586,6 @@ class _Hooks:
         stopper = getattr(trainer, "stopper", None)
         best = trainer.best_fitness
         return {
-            "metrics": {k: float(v) for k, v in (trainer.metrics or {}).items()
-                        if isinstance(v, (int, float)) and math.isfinite(float(v))},
             "epochs": min(trainer.epoch + 1, trainer.epochs),
             "best_epoch": getattr(stopper, "best_epoch", None),
             "best_fitness": float(best) if best is not None and math.isfinite(float(best)) else None,
@@ -621,7 +630,8 @@ class _Hooks:
             cancelled = isinstance(exc, KeyboardInterrupt) or self.ctx.cancellation.requested
             error = exc if isinstance(exc, DistillRunError) else classify(exc)
             self._quietly("the failure", self.rest.patch, "cancelled" if cancelled else "failed",
-                          error=None if cancelled else f"{error.code}: {error.message}",
+                          error=None if cancelled else error.message,
+                          error_code=None if cancelled else error.code,
                           metadata=self._metadata())
             return
         ctx = getattr(trainer, "platform", None) if trainer is not None else None
