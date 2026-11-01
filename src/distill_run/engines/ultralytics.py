@@ -10,9 +10,10 @@ The engine owns ``data``, ``model``, ``save_dir``, ``device``, ``project`` and
 own Platform callback
 (``ultralytics/utils/callbacks/platform.py``): it is switched on by
 ``ULTRALYTICS_API_KEY`` plus ``project=owner/project`` and ``name=model``, and
-sends ``training_started``, ``epoch_end`` (each epoch), console output, a
-checkpoint upload at most every 15 minutes, the final ``best.pt`` and
-``training_complete``. This engine adds what the callback lacks: binding to an
+sends ``training_started``, ``epoch_end``, console output, checkpoint uploads,
+the final ``best.pt`` and ``training_complete``; this engine gates ``epoch_end``
+and checkpoints to ``report_to.metrics_every_epochs`` /
+``checkpoint_every_epochs``. It also adds what the callback lacks: binding to an
 existing ``model_id``, a ``training_progress`` heartbeat, ``training_failed``, and
 exit code 10 when the final upload or ``training_complete`` did not go through.
 """
@@ -371,6 +372,15 @@ def prepare_data(path: Path, out_dir: Path, fraction: float) -> str:
     return str(path)
 
 
+def report_due(epoch: int, every: int) -> bool:
+    return every > 0 and epoch % every == 0
+
+
+def _swap(chain: list, original, replacement) -> None:
+    if original in chain:
+        chain[chain.index(original)] = replacement
+
+
 class _Hooks:
     """Distill-run callbacks next to Ultralytics' own (ours run first for each event)."""
 
@@ -454,18 +464,38 @@ class _Hooks:
             final_eval()
 
         trainer.final_eval = flagged_final_eval
-        report = self.report
-        if not self.webhook or not report.model_id:
+        if not self.webhook:
             return
         from ultralytics.utils.callbacks import platform
 
+        callbacks = trainer.callbacks
+        _swap(callbacks.get("on_fit_epoch_end", []), platform.on_fit_epoch_end,
+              partial(self._webhook_epoch_end, platform))
+        _swap(callbacks.get("on_model_save", []), platform.on_model_save,
+              partial(self._webhook_model_save, platform))
+        report = self.report
+        if not report.model_id:
+            return
         # The Platform callback reuses platform_model_id.txt only when resuming, so present
         # the run as a resume for that one call to bind events to report_to.model_id.
         record = ensure_dir(Path(trainer.save_dir)) / "platform_model_id.txt"
         record.write_text(report.model_id, encoding="utf-8")
-        chain = trainer.callbacks["on_pretrain_routine_start"]
-        if platform.on_pretrain_routine_start in chain:
-            chain[chain.index(platform.on_pretrain_routine_start)] = partial(_bound_start, platform)
+        _swap(callbacks.get("on_pretrain_routine_start", []), platform.on_pretrain_routine_start,
+              partial(_bound_start, platform))
+
+    def _webhook_epoch_end(self, platform, trainer) -> None:
+        if self._final_eval or report_due(trainer.epoch + 1, self.report.rest.metrics_every_epochs):
+            platform.on_fit_epoch_end(trainer)
+
+    def _webhook_model_save(self, platform, trainer) -> None:
+        epoch = trainer.epoch + 1
+        if epoch >= trainer.epochs or not report_due(epoch,
+                                                      self.report.rest.checkpoint_every_epochs):
+            return
+        ctx = getattr(trainer, "platform", None)
+        if ctx:
+            ctx["last_upload"] = 0.0  # the callback's own 15-minute limit would skip it
+        platform.on_model_save(trainer)
 
     def train_start(self, trainer) -> None:
         if self.rest:
@@ -496,14 +526,14 @@ class _Hooks:
         fitness = trainer.fitness
         events.progress(trainer.epoch + 1, trainer.epochs, per_epoch * (trainer.epochs - trainer.epoch - 1),
                         fitness=None if fitness is None or not math.isfinite(fitness) else round(fitness, 5))
-        if self.rest and self._last_epoch % self.rest.config.metrics_every_epochs == 0:
+        if self.rest and report_due(self._last_epoch, self.rest.config.metrics_every_epochs):
             fields = self._results(trainer)
             self._queue.submit(self._quietly, "metrics", self.rest.patch, "running", **fields)
 
     def model_save(self, trainer) -> None:
         every = self.rest.config.checkpoint_every_epochs if self.rest else 0
         epoch = trainer.epoch + 1
-        if not every or epoch % every or epoch >= trainer.epochs:
+        if not report_due(epoch, every) or epoch >= trainer.epochs:
             return
         if self._checkpoint and not self._checkpoint.done():
             logger.info("previous checkpoint upload still running; skipping epoch %d", epoch)

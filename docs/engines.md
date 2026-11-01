@@ -374,8 +374,16 @@ token is read from the variable named by `report_to.token_env`
 and uses its Platform callback (`/api/webhooks/training/metrics`,
 `/api/webhooks/models/upload`). With `--report-to-model-id` the events go to
 that existing model instead of creating one. The callback sends `training_started`,
-one `epoch_end` per epoch with all metrics, console output, a checkpoint at most
-every 15 minutes, the final `best.pt`, and `training_complete`. The engine adds:
+`epoch_end` with all metrics every `--report-to-metrics-every-epochs`
+(`report_to.metrics_every_epochs`, 1) epochs plus once more for the final
+validation, console output, an intermediate checkpoint (`best.pt`, else `last.pt`)
+every `--report-to-checkpoint-every-epochs` (`report_to.checkpoint_every_epochs`,
+10; 0 turns it off) epochs except the last one, the final `best.pt`, and
+`training_complete`. The engine swaps in these cadence gates for the callback's
+own `on_fit_epoch_end` / `on_model_save`, so the callback's 15-minute checkpoint
+limit does not apply. Platform-side cancellation rides on the `epoch_end`
+response, so with N > 1 it only takes effect on an epoch that reports. The
+engine adds:
 
 - a `training_progress` heartbeat every `report_to.heartbeat_seconds` (600; 0
   turns it off),
@@ -384,7 +392,7 @@ every 15 minutes, the final `best.pt`, and `training_complete`. The engine adds:
   weights upload, or `training_complete`. Local outputs are kept.
 
 Webhook calls use the SDK's retry with backoff; the SDK does not read
-`Retry-After`. Checkpoint cadence is the callback's fixed 15 minutes.
+`Retry-After`.
 
 *`rest`* uses the public API instead (design doc §8.2 / §8.3) and needs
 `--report-to-model-id`, which is the upload `assetId`:

@@ -232,6 +232,109 @@ def test_progress_skips_the_final_validation_callback(tmp_path: Path, capsys):
     assert [p["epoch"] for p in progress if p and p["event"] == "progress"] == [1, 2]
 
 
+def _fake_platform(monkeypatch):
+    """Stand-in for ultralytics.utils.callbacks.platform that records what it would send."""
+    import sys
+    import types
+
+    calls: list[tuple] = []
+    platform = types.ModuleType("ultralytics.utils.callbacks.platform")
+    platform.on_pretrain_routine_start = lambda trainer: None
+    platform.on_fit_epoch_end = lambda trainer: calls.append(("epoch_end", trainer.epoch + 1))
+    platform.on_model_save = lambda trainer: calls.append(
+        ("upload", trainer.epoch + 1, trainer.platform["last_upload"]))
+    names = ("ultralytics", "ultralytics.utils", "ultralytics.utils.callbacks")
+    modules = {name: types.ModuleType(name) for name in names}
+    modules["ultralytics"].utils = modules["ultralytics.utils"]
+    modules["ultralytics.utils"].callbacks = modules["ultralytics.utils.callbacks"]
+    modules["ultralytics.utils.callbacks"].platform = platform
+    modules["ultralytics.utils.callbacks.platform"] = platform
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    return platform, calls
+
+
+def _train_webhook(tmp_path: Path, monkeypatch, epochs: int, chain=True, **cadence):
+    """Drive _Hooks like Ultralytics: on_model_save, on_fit_epoch_end per epoch, then final_eval."""
+    monkeypatch.setenv("REPORT_TO_TOKEN", "t")
+    report = ReportTarget.from_config({"api_base_url": "http://p", "model": "acme-vision/p/m",
+                                       **cadence})
+    platform, calls = _fake_platform(monkeypatch)
+    hooks = _hooks(tmp_path, report)
+    trainer = SimpleNamespace(
+        epochs=epochs, start_epoch=0, epoch=0, train_time_start=time.time(), fitness=0.5,
+        save_dir=str(tmp_path), platform={"model_id": "m", "last_upload": 123.0},
+        callbacks={"on_pretrain_routine_start": [platform.on_pretrain_routine_start],
+                   "on_fit_epoch_end": [platform.on_fit_epoch_end],
+                   "on_model_save": [platform.on_model_save]} if chain else {})
+
+    def run(event):
+        for fn in trainer.callbacks.get(event, []):
+            fn(trainer)
+
+    def final_eval():  # as in Ultralytics: one more on_fit_epoch_end at epoch + 1
+        trainer.epoch += 1
+        hooks.fit_epoch_end(trainer)
+        run("on_fit_epoch_end")
+        trainer.epoch -= 1
+
+    trainer.final_eval = final_eval
+    hooks.pretrain_start(trainer)
+    for epoch in range(epochs):
+        trainer.epoch = epoch
+        hooks.model_save(trainer)
+        run("on_model_save")
+        hooks.fit_epoch_end(trainer)
+        run("on_fit_epoch_end")
+    trainer.final_eval()
+    return calls
+
+
+def test_webhook_reports_every_n_epochs(tmp_path: Path, monkeypatch):
+    calls = _train_webhook(tmp_path, monkeypatch, 5, metrics_every_epochs=2,
+                           checkpoint_every_epochs=2)
+    assert [c[1] for c in calls if c[0] == "epoch_end"] == [2, 4, 6]  # 6 is final_eval
+    assert [c for c in calls if c[0] == "upload"] == [("upload", 2, 0.0), ("upload", 4, 0.0)]
+
+
+def test_webhook_cadence_defaults_and_zero(tmp_path: Path, monkeypatch):
+    calls = _train_webhook(tmp_path, monkeypatch, 3)
+    assert [c[1] for c in calls if c[0] == "epoch_end"] == [1, 2, 3, 4]
+    assert [c for c in calls if c[0] == "upload"] == []
+    assert [c[1] for c in _train_webhook(tmp_path, monkeypatch, 12) if c[0] == "upload"] == [10]
+    assert [c for c in _train_webhook(tmp_path, monkeypatch, 12, checkpoint_every_epochs=0)
+            if c[0] == "upload"] == []
+
+
+def test_webhook_without_the_platform_callback_still_trains(tmp_path: Path, monkeypatch):
+    assert _train_webhook(tmp_path, monkeypatch, 2, chain=False, metrics_every_epochs=2) == []
+
+
+def test_rest_reports_every_n_epochs(tmp_path: Path):
+    from distill_run.platform_rest import RestConfig
+
+    sent = []
+    hooks = _hooks(tmp_path)
+    hooks.ctx.run_id = "r"
+    hooks.rest = SimpleNamespace(
+        config=RestConfig(metrics_every_epochs=2, checkpoint_every_epochs=2),
+        patch=lambda status, **fields: sent.append(("patch", fields["epochs"])),
+        upload=lambda path, name: sent.append(("upload", name)))
+    last = tmp_path / "last.pt"
+    last.write_bytes(b"w")
+    trainer = SimpleNamespace(epochs=5, start_epoch=0, train_time_start=time.time(), fitness=0.5,
+                              metrics={}, best_fitness=None, last=str(last),
+                              final_eval=lambda: None)
+    hooks.pretrain_start(trainer)
+    for epoch in range(5):
+        trainer.epoch = epoch
+        hooks.model_save(trainer)
+        hooks.fit_epoch_end(trainer)
+    hooks._queue.shutdown(wait=True)
+    assert [s for s in sent if s[0] == "patch"] == [("patch", 2), ("patch", 4)]
+    assert [s for s in sent if s[0] == "upload"] == [("upload", "last.pt"), ("upload", "last.pt")]
+
+
 def test_report_problem_names_what_did_not_reach_the_platform(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("REPORT_TO_TOKEN", "t")
     report = ReportTarget.from_config({"api_base_url": "http://p", "model": "acme-vision/p/m"})
