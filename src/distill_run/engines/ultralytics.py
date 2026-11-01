@@ -30,6 +30,7 @@ import re
 import shutil
 import threading
 import time
+import urllib.parse
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -44,6 +45,7 @@ from ..errors import (
     DataError,
     DatasetFetchError,
     DistillRunError,
+    PlatformCancelledError,
     PreflightError,
     ReportError,
     classify,
@@ -268,9 +270,9 @@ class UltralyticsEngine(Engine):
         trainer = model.trainer
         summary = hooks.summary(trainer)
         problem = hooks.finish(trainer, summary)
-        if ctx.cancellation.requested:
-            raise CancelledError(f"cancelled at epoch {summary['epochs_completed']}; "
-                                 f"weights so far are in {output / 'weights'}")
+        stopped = hooks.cancelled_error(trainer, summary)
+        if stopped:
+            raise stopped
         if problem:
             raise ReportError(f"{problem}; local results are in {output}")
         best = Path(trainer.best)
@@ -295,7 +297,7 @@ def _setup_ultralytics(ctx: RunContext, report: ReportTarget | None) -> None:
     else:
         os.environ.pop("ULTRALYTICS_API_KEY", None)
     try:
-        from ultralytics.utils import LOGGER, SETTINGS
+        from ultralytics.utils import LOGGER, SETTINGS, USER_CONFIG_DIR
     except ImportError as exc:
         raise PreflightError(
             f"ultralytics engine needs the ultralytics package: {exc}; "
@@ -307,6 +309,7 @@ def _setup_ultralytics(ctx: RunContext, report: ReportTarget | None) -> None:
         except ImportError as exc:
             raise PreflightError(f"reporting needs ultralytics-platform and httpx: {exc}") from exc
     redact.protect(LOGGER, logging.getLogger("distill_run"))
+    _install_fonts(os.environ.get("DISTILL_RUN_FONTS_DIR"), Path(USER_CONFIG_DIR))
     weights = ensure_dir(Path(ctx.model_cache_dir) / "yolo")
     SETTINGS.update({
         "weights_dir": str(weights),
@@ -316,6 +319,21 @@ def _setup_ultralytics(ctx: RunContext, report: ReportTarget | None) -> None:
         **{k: False for k in ("clearml", "comet", "dvc", "mlflow", "raytune", "tensorboard",
                               "wandb")},
     })
+
+
+def _install_fonts(source: str | None, config_dir: Path) -> None:
+    """Copy bundled fonts where Ultralytics looks first; otherwise it fetches Arial.ttf from
+    GitHub while checking the dataset, which fails where the Pod cannot reach GitHub."""
+    if not source or not Path(source).is_dir():
+        return
+    for font in sorted(Path(source).glob("*.ttf")):
+        target = config_dir / font.name
+        if target.exists():
+            continue
+        try:
+            shutil.copyfile(font, ensure_dir(config_dir) / font.name)
+        except OSError as exc:
+            logger.warning("could not copy %s to %s: %s", font.name, config_dir, exc)
 
 
 def _check_types(args: dict[str, Any]) -> None:
@@ -404,6 +422,8 @@ class _Hooks:
         self._queue = ThreadPoolExecutor(max_workers=1, thread_name_prefix="report")
         self._checkpoint: Future | None = None
         self._train_results: list[dict[str, Any]] = []
+        self._cancel_lock = threading.Lock()
+        self._cancel_sent = False
 
     @contextlib.contextmanager
     def watch_platform(self):
@@ -515,6 +535,37 @@ class _Hooks:
         if (ctx or self.rest) and self.report.heartbeat_seconds > 0:
             self._beat = threading.Thread(target=self._heartbeat, args=(trainer,), daemon=True)
             self._beat.start()
+        if ctx:
+            threading.Thread(target=self._watch_cancellation, args=(trainer,), daemon=True).start()
+
+    def _watch_cancellation(self, trainer) -> None:
+        while not self._beat_stop.is_set():
+            if self.ctx.cancellation.wait(1.0):
+                self.mark_cancelled(trainer)
+                return
+
+    def mark_cancelled(self, trainer) -> None:
+        """On SIGTERM, PATCH the webhook model to cancelled before the final upload, which
+        can outlast the Pod's grace period; the callback itself never reports a cancel."""
+        with self._cancel_lock:
+            ctx = getattr(trainer, "platform", None) if trainer is not None else None
+            if (self._cancel_sent or not self.webhook or not ctx
+                    or not self.ctx.cancellation.requested):
+                return
+            self._cancel_sent = True
+            report = self.report
+            owner, project, model = report.owner, report.project, report.model
+            url_path = urllib.parse.urlsplit(str(ctx.get("model_url") or "")).path
+            parts = [p for p in url_path.split("/") if p]
+            if len(parts) >= 3:  # the server may have renamed the model, e.g. m -> m-2
+                owner, project, model = parts[-3:]
+            config = replace(report.rest or RestConfig(), timeout_seconds=10.0, max_attempts=2,
+                             max_retry_wait=2.0)
+            reporter = RestReporter(RestClient(report.base_url, report.token, config),
+                                    owner=owner, project=project, model=model,
+                                    model_id=str(ctx.get("model_id") or ""))
+            self._quietly("the cancellation", reporter.patch, "cancelled",
+                          metadata=self._metadata())
 
     def batch_end(self, trainer) -> None:
         if self.ctx.cancellation.requested and not trainer.stop:
@@ -555,6 +606,7 @@ class _Hooks:
 
     def train_end(self, trainer) -> None:
         self.stop_heartbeat()
+        self.mark_cancelled(trainer)
         if getattr(trainer, "platform", None) or self.rest:
             events.stage("uploading")
 
@@ -634,6 +686,7 @@ class _Hooks:
                           error_code=None if cancelled else error.code,
                           metadata=self._metadata())
             return
+        self.mark_cancelled(trainer)
         ctx = getattr(trainer, "platform", None) if trainer is not None else None
         if not ctx or not ctx.get("model_id"):
             return
@@ -644,6 +697,16 @@ class _Hooks:
         platform._send("training_failed", {"error": error.message[:2000], "code": error.code,
                                            "runId": ctx.get("run_id")},
                        project, name, ctx["model_id"], retry=3)
+
+    def cancelled_error(self, trainer, summary: dict[str, Any]) -> DistillRunError | None:
+        where = (f"at epoch {summary['epochs_completed']}; "
+                 f"weights so far are in {self.output / 'weights'}")
+        if self.ctx.cancellation.requested:
+            return CancelledError(f"cancelled {where}")
+        ctx = getattr(trainer, "platform", None)
+        if self.webhook and ctx and ctx.get("cancelled"):
+            return PlatformCancelledError(f"cancelled from the platform {where}")
+        return None
 
     def summary(self, trainer) -> dict[str, Any]:
         stopper = getattr(trainer, "stopper", None)

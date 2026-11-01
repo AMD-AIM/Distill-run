@@ -143,7 +143,7 @@ Failures are separated so a shell script can tell a typo from a dead teacher.
 | 8 | engine failed |
 | 9 | out of memory |
 | 10 | results could not be reported to the platform |
-| 130 | cancelled by Ctrl-C / SIGTERM |
+| 130 | cancelled by Ctrl-C / SIGTERM (code `Cancelled`), or by the report_to platform (code `PlatformCancelled`) |
 
 The process also writes one `DISTILL_EVENT <json>` line on stdout per stage,
 per epoch, and at exit; see

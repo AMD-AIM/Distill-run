@@ -8,6 +8,7 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -497,3 +498,125 @@ def test_ultralytics_engine_accepts_its_flags():
             "report_to_metrics_every_epochs", "report_to_checkpoint_every_epochs"} <= accepted
     assert "max_steps" not in accepted and "logging_steps" not in accepted
     assert json.loads(json.dumps(sorted(accepted)))
+
+
+def _cancel_hooks(tmp_path: Path, monkeypatch, protocol="webhook"):
+    """Webhook hooks with a real Cancellation; REST calls are recorded, not sent."""
+    from distill_run.engines import ultralytics as ul
+    from distill_run.signals import Cancellation
+
+    monkeypatch.setenv("REPORT_TO_TOKEN", "tok-r156i")
+    report = ReportTarget.from_config({"api_base_url": "http://p", "model": "acme-vision/p/m",
+                                       "protocol": protocol, "model_id": "m1"})
+    sent: list[tuple] = []
+
+    def request(client, method, path, body=None, params=None):
+        sent.append((method, path, body, client.config))
+        return {}
+
+    monkeypatch.setattr(ul.RestClient, "request", request)
+    ctx = SimpleNamespace(cancellation=Cancellation(), run_id="r")
+    return ul._Hooks(ctx, report, tmp_path), sent
+
+
+def test_sigterm_marks_the_webhook_model_cancelled_at_once(tmp_path: Path, monkeypatch):
+    hooks, sent = _cancel_hooks(tmp_path, monkeypatch)
+    hooks.report = replace(hooks.report, heartbeat_seconds=0)
+    trainer = SimpleNamespace(stop=False, platform={
+        "model_id": "m1", "model_url": "https://platform.example/acme-vision/p/m-2"})
+    hooks.train_start(trainer)
+    hooks.ctx.cancellation.request(15)
+    deadline = time.time() + 5
+    while not sent and time.time() < deadline:
+        time.sleep(0.05)
+    hooks.batch_end(trainer)
+    hooks.train_end(trainer)  # runs before the callback's final upload
+    assert trainer.stop
+    assert len(sent) == 1
+    method, path, body, config = sent[0]
+    assert (method, path, body["status"]) == ("PATCH", "/api/models/acme-vision/p/m-2",
+                                              "cancelled")
+    assert set(body) == {"status", "metadata"}
+    assert config.timeout_seconds * config.max_attempts + config.max_retry_wait <= 30
+
+
+def test_webhook_cancel_patch_falls_back_to_the_report_model(tmp_path: Path, monkeypatch):
+    hooks, sent = _cancel_hooks(tmp_path, monkeypatch)
+    hooks.train_end(SimpleNamespace(platform={"model_id": "m1"}))
+    assert sent == []  # no signal, no PATCH
+    hooks.ctx.cancellation.request(15)
+    hooks.train_end(SimpleNamespace(platform=None))
+    assert sent == []  # the platform never took the run
+    hooks._cancel_sent = False
+    hooks.train_end(SimpleNamespace(platform={"model_id": "m1"}))
+    assert [(m, p) for m, p, _, _ in sent] == [("PATCH", "/api/models/acme-vision/p/m")]
+
+
+def test_cancel_patch_failure_does_not_stop_the_upload(tmp_path: Path, monkeypatch, caplog):
+    from distill_run.engines import ultralytics as ul
+    from distill_run.platform_rest import PlatformHTTPError
+
+    hooks, _ = _cancel_hooks(tmp_path, monkeypatch)
+
+    def refuse(client, method, path, body=None, params=None):
+        raise PlatformHTTPError(method, path, 409)
+
+    monkeypatch.setattr(ul.RestClient, "request", refuse)
+    hooks.ctx.cancellation.request(15)
+    hooks.train_end(SimpleNamespace(platform={"model_id": "m1"}))
+    assert "reporting the cancellation failed" in caplog.text
+    assert "tok-r156i" not in caplog.text
+
+
+def test_platform_cancel_is_exit_130_with_its_own_code(tmp_path: Path, monkeypatch):
+    from distill_run.errors import CancelledError, PlatformCancelledError
+
+    hooks, sent = _cancel_hooks(tmp_path, monkeypatch)
+    summary = {"epochs_completed": 2}
+    trainer = SimpleNamespace(platform={"model_id": "m1", "cancelled": False})
+    assert hooks.cancelled_error(trainer, summary) is None
+    trainer.platform["cancelled"] = True  # epoch_end answered cancelled: true
+    error = hooks.cancelled_error(trainer, summary)
+    assert isinstance(error, PlatformCancelledError)
+    assert (error.exit_code, error.code) == (130, "PlatformCancelled")
+    assert "epoch 2" in error.message
+    hooks.ctx.cancellation.request(15)  # our own SIGTERM wins
+    assert type(hooks.cancelled_error(trainer, summary)) is CancelledError
+    assert sent == []
+
+
+def test_platform_cancel_exit_event(run_dirs, monkeypatch, capsys):
+    from distill_run.engines import ultralytics as ul
+    from distill_run.errors import PlatformCancelledError
+
+    def cancelled(self, ctx):
+        raise PlatformCancelledError("cancelled from the platform at epoch 2")
+
+    monkeypatch.setattr(ul, "_setup_ultralytics", lambda ctx, report: None)
+    monkeypatch.setattr(ul, "_check_types", lambda args: None)
+    monkeypatch.setattr(ul.UltralyticsEngine, "preflight", lambda self, ctx: None)
+    monkeypatch.setattr(ul.UltralyticsEngine, "run", cancelled)
+    monkeypatch.setattr(ul.UltralyticsEngine, "dataset_specs", lambda self, ctx: {})
+    work, output = run_dirs
+    code = main(["--engine", "ultralytics", "--model", "yolo26n.yaml", "--data", "x.ndjson",
+                 "--output", str(output), "--work-dir", str(work)])
+    assert code == 130
+    lines = [e for e in (events.parse(x) for x in capsys.readouterr().out.splitlines()) if e]
+    assert lines[-1]["event"] == "exit"
+    assert (lines[-1]["exit_code"], lines[-1]["code"]) == (130, "PlatformCancelled")
+
+
+def test_bundled_fonts_land_in_the_ultralytics_config_dir(tmp_path: Path):
+    from distill_run.engines.ultralytics import _install_fonts
+
+    fonts, config = tmp_path / "fonts", tmp_path / "config"
+    fonts.mkdir()
+    (fonts / "Arial.ttf").write_bytes(b"font")
+    _install_fonts(str(fonts), config)
+    assert (config / "Arial.ttf").read_bytes() == b"font"
+    (config / "Arial.ttf").write_bytes(b"newer")
+    _install_fonts(str(fonts), config)
+    assert (config / "Arial.ttf").read_bytes() == b"newer"
+    _install_fonts(None, tmp_path / "none")
+    _install_fonts(str(tmp_path / "missing"), tmp_path / "none")
+    assert not (tmp_path / "none").exists()

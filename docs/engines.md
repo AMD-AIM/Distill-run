@@ -389,7 +389,15 @@ engine adds:
   turns it off),
 - `training_failed` with the error code when training raises,
 - exit code 10 when training finished but the platform did not take the run, the
-  weights upload, or `training_complete`. Local outputs are kept.
+  weights upload, or `training_complete`. Local outputs are kept,
+- on SIGTERM / Ctrl-C, `PATCH /api/models/{owner}/{project}/{model}` with
+  `status: cancelled` as soon as the signal arrives (model path from the callback's
+  `modelUrl`; at most 2 tries of 10 s), before the final upload, which may not finish
+  inside the Pod's grace period. The run then uploads what it has and exits 130
+  (`Cancelled`),
+- exit code 130 with code `PlatformCancelled` when the platform stopped the run
+  (`cancelled: true` in a webhook response, logged as `Platform: Training cancelled
+  from Platform`). The weights so far are still uploaded.
 
 Webhook calls use the SDK's retry with backoff; the SDK does not read
 `Retry-After`.
