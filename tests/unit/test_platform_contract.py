@@ -120,6 +120,85 @@ def test_digest_mismatch_after_download_drops_the_cache(tmp_path: Path, signed_s
     assert not list(cache.glob("*.done"))
 
 
+class _Export(http.server.BaseHTTPRequestHandler):
+    """/data.ndjson only with ?sig=new (else 403); /api/datasets/... hands out that URL."""
+
+    body = b'{"type": "dataset"}\n'
+    calls: list[tuple[str, str | None]] = []
+    export_status = 200
+
+    def do_GET(self):  # noqa: N802
+        type(self).calls.append((self.path, self.headers.get("Authorization")))
+        if self.path.startswith("/api/datasets/"):
+            url = f"http://127.0.0.1:{self.server.server_port}/data.ndjson?sig=new"
+            status, data = type(self).export_status, json.dumps({"downloadUrl": url}).encode()
+        elif self.path == "/data.ndjson?sig=new":
+            status, data = 200, self.body
+        else:
+            status, data = 403, b""
+        self.send_response(status)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def export_server():
+    _Export.calls, _Export.export_status = [], 200
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Export)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}"
+    server.shutdown()
+
+
+def _ultralytics_specs(run_dirs, monkeypatch, base: str, **extra):
+    from distill_run.engines import ultralytics as ul
+
+    monkeypatch.setattr(ul, "_setup_ultralytics", lambda ctx, report: None)
+    monkeypatch.setattr(ul, "_check_types", lambda args: None)
+    monkeypatch.setenv("REPORT_TO_TOKEN", "tok-r156i")
+    work, output = run_dirs
+    ctx = build_context({"engine": "ultralytics", "output": str(output), "work_dir": str(work),
+                         "student": "yolo26n.yaml", "dataset": f"{base}/data.ndjson?sig=old",
+                         "dataset_sha256": "sha256:" + _sha(_Export.body),
+                         "report_to_url": base, "report_to_model": "acme-vision/p/m", **extra})
+    return ul.UltralyticsEngine().dataset_specs(ctx)
+
+
+def test_expired_dataset_url_is_resigned_with_the_report_token(run_dirs, tmp_path: Path,
+                                                               monkeypatch, export_server, caplog):
+    specs = _ultralytics_specs(run_dirs, monkeypatch, export_server,
+                               dataset_slug="acme-vision/warehouse", dataset_version=3)
+    assert resolve(specs["dataset"], tmp_path / "cache").path.read_bytes() == _Export.body
+    assert _Export.calls == [
+        ("/data.ndjson?sig=old", None),
+        ("/api/datasets/acme-vision/warehouse/export?v=3", "Bearer tok-r156i"),
+        ("/data.ndjson?sig=new", None),
+    ]
+    assert "tok-r156i" not in caplog.text and "sig=old" not in caplog.text
+
+
+def test_resign_rejected_exits_5_without_the_token(run_dirs, tmp_path: Path, monkeypatch,
+                                                   export_server):
+    _Export.export_status = 401
+    specs = _ultralytics_specs(run_dirs, monkeypatch, export_server,
+                               dataset_slug="acme-vision/warehouse")
+    with pytest.raises(DatasetFetchError, match="re-signing dataset acme-vision/warehouse") as info:
+        resolve(specs["dataset"], tmp_path / "cache")
+    assert info.value.exit_code == 5 and "tok-r156i" not in info.value.message
+
+
+def test_without_a_dataset_slug_an_expired_url_is_not_resigned(run_dirs, tmp_path: Path,
+                                                               monkeypatch, export_server):
+    specs = _ultralytics_specs(run_dirs, monkeypatch, export_server)
+    with pytest.raises(DatasetFetchError, match="HTTP 403"):
+        resolve(specs["dataset"], tmp_path / "cache")
+    assert not any(path.startswith("/api/") for path, _ in _Export.calls)
+
+
 def test_cli_exits_5_and_reports_the_stage(run_dirs, tmp_path: Path, capsys):
     work, output = run_dirs
     data = tmp_path / "set.ndjson"
