@@ -553,9 +553,14 @@ def test_webhook_cancel_patch_falls_back_to_the_report_model(tmp_path: Path, mon
 
 
 def test_cancel_patch_failure_does_not_stop_the_upload(tmp_path: Path, monkeypatch, caplog):
+    import logging
+
     from distill_run.engines import ultralytics as ul
     from distill_run.platform_rest import PlatformHTTPError
 
+    # configure_logging() in an earlier test may have stopped propagation to caplog's handler.
+    monkeypatch.setattr(logging.getLogger("distill_run"), "propagate", True)
+    caplog.set_level(logging.WARNING, logger="distill_run")
     hooks, _ = _cancel_hooks(tmp_path, monkeypatch)
 
     def refuse(client, method, path, body=None, params=None):
