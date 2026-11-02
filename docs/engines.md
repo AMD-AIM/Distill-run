@@ -374,29 +374,45 @@ token is read from the variable named by `report_to.token_env`
 and uses its Platform callback (`/api/webhooks/training/metrics`,
 `/api/webhooks/models/upload`). With `--report-to-model-id` the events go to
 that existing model instead of creating one. The callback sends `training_started`,
-one `epoch_end` per epoch with all metrics, console output, a checkpoint at most
-every 15 minutes, the final `best.pt`, and `training_complete`. The engine adds:
+`epoch_end` with all metrics every `--report-to-metrics-every-epochs`
+(`report_to.metrics_every_epochs`, 1) epochs plus once more for the final
+validation, console output, an intermediate checkpoint (`best.pt`, else `last.pt`)
+every `--report-to-checkpoint-every-epochs` (`report_to.checkpoint_every_epochs`,
+10; 0 turns it off) epochs except the last one, the final `best.pt`, and
+`training_complete`. The engine swaps in these cadence gates for the callback's
+own `on_fit_epoch_end` / `on_model_save`, so the callback's 15-minute checkpoint
+limit does not apply. Platform-side cancellation rides on the `epoch_end`
+response, so with N > 1 it only takes effect on an epoch that reports. The
+engine adds:
 
 - a `training_progress` heartbeat every `report_to.heartbeat_seconds` (600; 0
   turns it off),
 - `training_failed` with the error code when training raises,
 - exit code 10 when training finished but the platform did not take the run, the
-  weights upload, or `training_complete`. Local outputs are kept.
+  weights upload, or `training_complete`. Local outputs are kept,
+- on SIGTERM / Ctrl-C, `PATCH /api/models/{owner}/{project}/{model}` with
+  `status: cancelled` as soon as the signal arrives (model path from the callback's
+  `modelUrl`; at most 2 tries of 10 s), before the final upload, which may not finish
+  inside the Pod's grace period. The run then uploads what it has and exits 130
+  (`Cancelled`),
+- exit code 130 with code `PlatformCancelled` when the platform stopped the run
+  (`cancelled: true` in a webhook response, logged as `Platform: Training cancelled
+  from Platform`). The weights so far are still uploaded.
 
 Webhook calls use the SDK's retry with backoff; the SDK does not read
-`Retry-After`. Checkpoint cadence is the callback's fixed 15 minutes.
+`Retry-After`.
 
 *`rest`* uses the public API instead (design doc §8.2 / §8.3) and needs
 `--report-to-model-id`, which is the upload `assetId`:
 
 | when | calls |
 |---|---|
-| training starts | `PATCH /api/models/{owner}/{project}/{model}` with `status: training`; 400/401/403/404/409 stops the run with exit 10 before the first epoch |
-| every `report_to.metrics_every_epochs` (1) | `PATCH` with `metrics` (`mAP50`, `mAP50-95`, `precision`, `recall`), `epochs`, `bestEpoch`, `bestFitness`, `datasetSlug`, `metadata` |
-| every `report_to.checkpoint_every_epochs` (10; 0 turns it off) | upload a copy of `last.pt` as `last.pt` |
+| training starts | `PATCH /api/models/{owner}/{project}/{model}` with `status: running`; 400/401/403/404/409 stops the run with exit 10 before the first epoch |
+| every `--report-to-metrics-every-epochs` (`report_to.metrics_every_epochs`, 1) | `PATCH` with `trainResults` (every reported epoch so far, each `{epoch, fitness, metrics: {mAP50, mAP50-95, precision, recall}, system: {}, timestamp}`), `epochs`, `bestEpoch`, `bestFitness`, `datasetSlug`, `metadata`; the PATCH body has no `metrics` field |
+| every `--report-to-checkpoint-every-epochs` (`report_to.checkpoint_every_epochs`, 10; 0 turns it off), except the last epoch | upload a copy of `last.pt` as `last.pt` |
 | every `report_to.heartbeat_seconds` | `PATCH` with `status` and `metadata` only |
-| training ends | upload `best.pt`, then `PATCH` with `status: completed` (or `cancelled`) and `trainResults` (the `summary.json` content) |
-| training raises | `PATCH` with `status: failed` and `trainingError` |
+| training ends | upload `best.pt`, then `PATCH` with `status: completed` (or `cancelled`) and the same `trainResults` array, plus the last epoch if it was not reported |
+| training raises | `PATCH` with `status: failed` and `trainingError: {message (≤1000), code (≤50), timestamp}` |
 
 An upload is `POST /api/upload/signed-url` (`assetType: models`, `assetId`,
 `filename`, `contentType`, `totalBytes`), then `PUT uploadUrl` with every
@@ -409,8 +425,8 @@ only log a warning when they fail. A failed final upload or final `PATCH` exits
 10. `PATCH` never sends `name` or `projectId`.
 
 The fields that are not settled yet are configurable under `report_to`:
-`rest.paths`, `rest.statuses` (`training`, `completed`, `failed`, `cancelled`),
-`rest.train_results_field` (empty string drops it), `rest.upload_md5` (base64
+`rest.paths`, `rest.statuses` (`running`, `completed`, `failed`, `cancelled`),
+`rest.train_results_field` (empty string drops it), `rest.upload_md5` (lowercase hex
 MD5 on `complete`), and `metadata` (merged into every `PATCH`, for example
 `--set report_to.metadata.session_id=sess_7f3a`).
 

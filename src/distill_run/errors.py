@@ -102,6 +102,13 @@ class CancelledError(DistillRunError):
         super().__init__(message)
 
 
+class PlatformCancelledError(DistillRunError):
+    """The report_to platform stopped the run; its weights were still uploaded."""
+
+    code = "PlatformCancelled"
+    exit_code = ExitCode.CANCELLED
+
+
 class InternalError(DistillRunError):
     code = "Internal"
     exit_code = ExitCode.INTERNAL

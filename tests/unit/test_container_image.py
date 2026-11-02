@@ -68,6 +68,14 @@ def test_per_commit_args_come_after_every_run(dockerfile):
         assert min(declared) > last_run
 
 
+def test_dockerfile_bundles_the_ultralytics_font(dockerfile):
+    lines = dockerfile.splitlines()
+    assert re.search(r"^ARG ARIAL_SHA256=[0-9a-f]{64}$", dockerfile, re.M)
+    assert "DISTILL_RUN_FONTS_DIR=/usr/local/share/distill-run/fonts" in dockerfile
+    fetch = next(i for i, line in enumerate(lines) if "ARIAL_SHA256}" in line)
+    assert fetch < lines.index("COPY . /opt/distill-run")
+
+
 def test_dockerignore_keeps_submodule_sources():
     lines = (REPO / ".dockerignore").read_text(encoding="utf-8").splitlines()
     for pattern in ("**/.git", ".venv", ".venvs", ".distill", "build", "work", "output"):

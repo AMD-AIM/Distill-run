@@ -468,6 +468,25 @@ PARAMS: tuple[Param, ...] = (
         config_paths=(("ultralytics", "report_to.protocol"),),
     ),
     Param(
+        flag="--report-to-metrics-every-epochs",
+        dest="report_to_metrics_every_epochs",
+        help="Report metrics every N epochs (default: 1), in both report protocols.",
+        kind="int",
+        engines=ULTRA,
+        env="REPORT_TO_METRICS_EVERY_EPOCHS",
+        config_paths=(("ultralytics", "report_to.metrics_every_epochs"),),
+    ),
+    Param(
+        flag="--report-to-checkpoint-every-epochs",
+        dest="report_to_checkpoint_every_epochs",
+        help="Upload an intermediate checkpoint every N epochs (default: 10; 0 turns it off), "
+        "in both report protocols.",
+        kind="int",
+        engines=ULTRA,
+        env="REPORT_TO_CHECKPOINT_EVERY_EPOCHS",
+        config_paths=(("ultralytics", "report_to.checkpoint_every_epochs"),),
+    ),
+    Param(
         flag="--dataset-slug",
         dest="dataset_slug",
         help="Platform dataset as owner/dataset; used to re-sign an expired --data URL.",

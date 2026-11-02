@@ -159,13 +159,15 @@ distill-run --engine yolo --model yolo26n.pt --data /data/coco8 \
 | `--report-to-model` | `owner/project/model` | 无 | `REPORT_TO_MODEL` | 上报时的项目与模型名 |
 | `--report-to-model-id` | string | 无 | `REPORT_TO_MODEL_ID` | 绑定到平台上已存在的模型；`rest` 模式下即上传用的 `assetId`，必填 |
 | `--report-to-protocol` | string | `webhook` | `REPORT_TO_PROTOCOL` | `webhook`：Ultralytics 自带回调；`rest`：公开 REST（上传 + `PATCH /api/models/...`） |
-| `--dataset-slug` | `owner/dataset` | 无 | `DATASET_SLUG` | 签名 URL 过期时用它重新获取导出链接 |
+| `--report-to-metrics-every-epochs` | int | `1` | `REPORT_TO_METRICS_EVERY_EPOCHS` | 每 N 轮上报一次指标（`report_to.metrics_every_epochs`，≥1），两种上报方式都生效；训练结束时的最终指标照常上报 |
+| `--report-to-checkpoint-every-epochs` | int | `10` | `REPORT_TO_CHECKPOINT_EVERY_EPOCHS` | 每 N 轮上传一次中间 checkpoint（`report_to.checkpoint_every_epochs`，≥0，0 表示不传），两种上报方式都生效；最后一轮不传，交给最终上传 |
+| `--dataset-slug` | `owner/dataset`，最长 100 个字符 | 无 | `DATASET_SLUG` | 签名 URL 过期时用它重新获取导出链接；超过 100 个字符以退出码 3 结束 |
 | `--dataset-version` | int | 最新 | `DATASET_VERSION` | 重新获取链接时的数据集版本 |
 
 上报 token 只能通过环境变量传入（变量名可用 `report_to.token_env` 修改），
 不会出现在日志和输出文件里。训练完成但平台没有收到权重或 `training_complete`
-时退出码为 10。`rest` 模式的上报频率、路径和状态值通过 `report_to.*` 配置（例如
-`--set report_to.metrics_every_epochs=5`）。白名单、两种上报方式、心跳和事件格式见
+时退出码为 10。上报路径和状态值通过 `report_to.*` 配置（例如
+`--set report_to.metadata.session_id=…`）。白名单、两种上报方式、心跳和事件格式见
 [`engines.md`](engines.md#ultralytics--object-detection-through-the-ultralytics-package)。
 
 ## 配置优先级

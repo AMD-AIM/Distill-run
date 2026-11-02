@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import http.server
 import io
 import json
 import logging
+import re
 import threading
 from pathlib import Path
 
 import pytest
 
-from distill_run import redact
+from distill_run import defaults, redact
 from distill_run.engines.ultralytics import ReportTarget
 from distill_run.errors import ConfigError
 from distill_run.platform_rest import (
@@ -21,9 +24,11 @@ from distill_run.platform_rest import (
     RestReporter,
     platform_metrics,
     resign_dataset_url,
+    train_result,
 )
 
 TOKEN = "tok-SECRET-1"
+UTC_Z = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$")
 
 
 class _Platform(http.server.BaseHTTPRequestHandler):
@@ -150,19 +155,69 @@ def test_client_errors_are_not_retried_and_hide_the_token(platform):
 
 def test_patch_body_follows_section_8_3(platform):
     base, fake = platform
+    results = [train_result(100, 0.71, {"metrics/mAP50(B)": 0.88, "metrics/mAP50-95(B)": 0.64,
+                                        "val/box_loss": 1.2})]
     _reporter(base, metadata={"session_id": "sess_7f3a"}).patch(
-        "completed", metrics={"metrics/mAP50(B)": 0.88, "metrics/mAP50-95(B)": 0.64,
-                              "val/box_loss": 1.2},
-        epochs=100, best_epoch=83, best_fitness=0.71, train_results={"seconds": 9.5},
+        "completed", epochs=100, best_epoch=83, best_fitness=0.71, train_results=results,
         metadata={"run_id": "r1"})
     call = fake.calls[0]
     assert call["method"] == "PATCH" and call["path"] == "/api/models/acme-vision/warehouse/exp-1"
     assert call["body"] == {
-        "status": "completed", "metrics": {"mAP50": 0.88, "mAP50-95": 0.64}, "epochs": 100,
+        "status": "completed", "epochs": 100,
         "bestEpoch": 83, "bestFitness": 0.71, "datasetSlug": "acme-vision/warehouse",
-        "trainResults": {"seconds": 9.5}, "metadata": {"session_id": "sess_7f3a", "run_id": "r1"},
+        "trainResults": results, "metadata": {"session_id": "sess_7f3a", "run_id": "r1"},
     }
+    assert results[0]["metrics"] == {"mAP50": 0.88, "mAP50-95": 0.64}
     assert "name" not in call["body"] and "projectId" not in call["body"]
+    assert "metrics" not in call["body"]
+
+
+def test_running_status_is_running_in_the_defaults(platform, monkeypatch):
+    base, fake = platform
+    _reporter(base).patch("running")
+    assert fake.calls[0]["body"]["status"] == "running"
+    monkeypatch.setenv("REPORT_TO_TOKEN", "t")
+    section = {**copy.deepcopy(defaults.ULTRALYTICS["report_to"]), "api_base_url": "http://p",
+               "model": "acme-vision/p/m", "protocol": "rest", "model_id": "65f1"}
+    assert ReportTarget.from_config(section).rest.statuses["running"] == "running"
+
+
+def test_training_error_is_an_object_within_the_limits(platform):
+    base, fake = platform
+    _reporter(base).patch("failed", error="m" * 2000, error_code="C" * 60)
+    error = fake.calls[0]["body"]["trainingError"]
+    assert set(error) == {"message", "code", "timestamp"}
+    assert error["message"] == "m" * 1000 and error["code"] == "C" * 50
+    assert UTC_Z.match(error["timestamp"])
+    _reporter(base).patch("failed", error="no code")
+    assert set(fake.calls[1]["body"]["trainingError"]) == {"message", "timestamp"}
+
+
+def test_train_result_item_shape():
+    item = train_result(3, 0.5, {"metrics/mAP50(B)": 0.8, "val/box_loss": 1.0})
+    assert {k: v for k, v in item.items() if k != "timestamp"} == {
+        "epoch": 3, "fitness": 0.5, "metrics": {"mAP50": 0.8}, "system": {}}
+    assert UTC_Z.match(item["timestamp"])
+    assert "fitness" not in train_result(1, None, {}) and "fitness" not in train_result(
+        1, float("nan"), {})
+
+
+def test_upload_md5_is_lowercase_hex(platform, tmp_path: Path):
+    base, fake = platform
+    weights = tmp_path / "best.pt"
+    weights.write_bytes(b"x" * 1000)
+    _reporter(base, upload_md5=True).upload(weights)
+    md5 = fake.calls[-1]["body"]["md5"]
+    assert re.fullmatch(r"[0-9a-f]{32}", md5) and md5 == hashlib.md5(b"x" * 1000).hexdigest()
+
+
+def test_dataset_slug_longer_than_100_characters_is_a_config_error(monkeypatch):
+    monkeypatch.setenv("REPORT_TO_TOKEN", "t")
+    section = {"api_base_url": "http://p", "model": "acme-vision/p/m"}
+    ok = "acme-vision/" + "d" * 88
+    assert ReportTarget.from_config({**section, "dataset_slug": ok}).dataset_slug == ok
+    with pytest.raises(ConfigError, match="100"):
+        ReportTarget.from_config({**section, "dataset_slug": ok + "d"})
 
 
 def test_paths_and_statuses_are_configurable(platform):
@@ -235,3 +290,16 @@ def test_log_filter_masks_the_token_in_messages_and_tracebacks(monkeypatch):
     assert "ul_secret_tok_9" not in text
     assert "Illegal header value b'Bearer ***'" in text
     assert "ValueError: Invalid header value b'Bearer ***'" in text
+
+
+def test_report_cadence_defaults_zero_and_bad_values(monkeypatch):
+    monkeypatch.setenv("REPORT_TO_TOKEN", "t")
+    section = {"api_base_url": "http://p", "model": "acme-vision/p/m"}
+    target = ReportTarget.from_config(section)
+    assert (target.rest.metrics_every_epochs, target.rest.checkpoint_every_epochs) == (1, 10)
+    off = ReportTarget.from_config({**section, "checkpoint_every_epochs": 0})
+    assert off.rest.checkpoint_every_epochs == 0
+    for bad in ({"metrics_every_epochs": 0}, {"checkpoint_every_epochs": -1},
+                {"metrics_every_epochs": "abc"}):
+        with pytest.raises(ConfigError):
+            ReportTarget.from_config({**section, **bad})

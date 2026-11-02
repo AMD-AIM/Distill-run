@@ -10,9 +10,10 @@ The engine owns ``data``, ``model``, ``save_dir``, ``device``, ``project`` and
 own Platform callback
 (``ultralytics/utils/callbacks/platform.py``): it is switched on by
 ``ULTRALYTICS_API_KEY`` plus ``project=owner/project`` and ``name=model``, and
-sends ``training_started``, ``epoch_end`` (each epoch), console output, a
-checkpoint upload at most every 15 minutes, the final ``best.pt`` and
-``training_complete``. This engine adds what the callback lacks: binding to an
+sends ``training_started``, ``epoch_end``, console output, checkpoint uploads,
+the final ``best.pt`` and ``training_complete``; this engine gates ``epoch_end``
+and checkpoints to ``report_to.metrics_every_epochs`` /
+``checkpoint_every_epochs``. It also adds what the callback lacks: binding to an
 existing ``model_id``, a ``training_progress`` heartbeat, ``training_failed``, and
 exit code 10 when the final upload or ``training_complete`` did not go through.
 """
@@ -29,6 +30,7 @@ import re
 import shutil
 import threading
 import time
+import urllib.parse
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -43,6 +45,7 @@ from ..errors import (
     DataError,
     DatasetFetchError,
     DistillRunError,
+    PlatformCancelledError,
     PreflightError,
     ReportError,
     classify,
@@ -53,6 +56,7 @@ from ..platform_rest import (
     RestClient,
     RestConfig,
     RestReporter,
+    train_result,
 )
 from ..platform_rest import resign_dataset_url as _resign
 from ..utils import atomic_write_json, ensure_dir
@@ -160,6 +164,8 @@ class ReportTarget:
         slug = section.get("dataset_slug")
         if slug and len(str(slug).strip("/").split("/")) != 2:
             raise ConfigError("--dataset-slug must be owner/dataset")
+        if slug and len(str(slug).strip("/")) > 100:
+            raise ConfigError("--dataset-slug is longer than 100 characters")
         version = section.get("dataset_version")
         protocol = str(section.get("protocol") or "webhook").lower()
         if protocol not in PROTOCOLS:
@@ -168,7 +174,10 @@ class ReportTarget:
         if protocol == "rest" and not model_id:
             raise ConfigError("report_to.protocol=rest needs --report-to-model-id "
                               "(the assetId weights are uploaded to)")
-        rest = RestConfig.from_section(section)
+        try:
+            rest = RestConfig.from_section(section)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"invalid report_to settings: {exc}") from exc
         if rest.metrics_every_epochs < 1 or rest.checkpoint_every_epochs < 0:
             raise ConfigError("report_to.metrics_every_epochs must be >= 1 and "
                               "report_to.checkpoint_every_epochs >= 0")
@@ -261,9 +270,9 @@ class UltralyticsEngine(Engine):
         trainer = model.trainer
         summary = hooks.summary(trainer)
         problem = hooks.finish(trainer, summary)
-        if ctx.cancellation.requested:
-            raise CancelledError(f"cancelled at epoch {summary['epochs_completed']}; "
-                                 f"weights so far are in {output / 'weights'}")
+        stopped = hooks.cancelled_error(trainer, summary)
+        if stopped:
+            raise stopped
         if problem:
             raise ReportError(f"{problem}; local results are in {output}")
         best = Path(trainer.best)
@@ -288,7 +297,7 @@ def _setup_ultralytics(ctx: RunContext, report: ReportTarget | None) -> None:
     else:
         os.environ.pop("ULTRALYTICS_API_KEY", None)
     try:
-        from ultralytics.utils import LOGGER, SETTINGS
+        from ultralytics.utils import LOGGER, SETTINGS, USER_CONFIG_DIR
     except ImportError as exc:
         raise PreflightError(
             f"ultralytics engine needs the ultralytics package: {exc}; "
@@ -300,6 +309,7 @@ def _setup_ultralytics(ctx: RunContext, report: ReportTarget | None) -> None:
         except ImportError as exc:
             raise PreflightError(f"reporting needs ultralytics-platform and httpx: {exc}") from exc
     redact.protect(LOGGER, logging.getLogger("distill_run"))
+    _install_fonts(os.environ.get("DISTILL_RUN_FONTS_DIR"), Path(USER_CONFIG_DIR))
     weights = ensure_dir(Path(ctx.model_cache_dir) / "yolo")
     SETTINGS.update({
         "weights_dir": str(weights),
@@ -309,6 +319,21 @@ def _setup_ultralytics(ctx: RunContext, report: ReportTarget | None) -> None:
         **{k: False for k in ("clearml", "comet", "dvc", "mlflow", "raytune", "tensorboard",
                               "wandb")},
     })
+
+
+def _install_fonts(source: str | None, config_dir: Path) -> None:
+    """Copy bundled fonts where Ultralytics looks first; otherwise it fetches Arial.ttf from
+    GitHub while checking the dataset, which fails where the Pod cannot reach GitHub."""
+    if not source or not Path(source).is_dir():
+        return
+    for font in sorted(Path(source).glob("*.ttf")):
+        target = config_dir / font.name
+        if target.exists():
+            continue
+        try:
+            shutil.copyfile(font, ensure_dir(config_dir) / font.name)
+        except OSError as exc:
+            logger.warning("could not copy %s to %s: %s", font.name, config_dir, exc)
 
 
 def _check_types(args: dict[str, Any]) -> None:
@@ -368,6 +393,15 @@ def prepare_data(path: Path, out_dir: Path, fraction: float) -> str:
     return str(path)
 
 
+def report_due(epoch: int, every: int) -> bool:
+    return every > 0 and epoch % every == 0
+
+
+def _swap(chain: list, original, replacement) -> None:
+    if original in chain:
+        chain[chain.index(original)] = replacement
+
+
 class _Hooks:
     """Distill-run callbacks next to Ultralytics' own (ours run first for each event)."""
 
@@ -387,6 +421,9 @@ class _Hooks:
         self._final_eval = False
         self._queue = ThreadPoolExecutor(max_workers=1, thread_name_prefix="report")
         self._checkpoint: Future | None = None
+        self._train_results: list[dict[str, Any]] = []
+        self._cancel_lock = threading.Lock()
+        self._cancel_sent = False
 
     @contextlib.contextmanager
     def watch_platform(self):
@@ -416,7 +453,7 @@ class _Hooks:
     def finish(self, trainer, summary: dict[str, Any]) -> str | None:
         """Send the final results; return what did not reach the platform, if anything."""
         if self.rest:
-            return self._rest_finish(trainer, summary)
+            return self._rest_finish(trainer)
         return self.report_problem(trainer)
 
     def report_problem(self, trainer) -> str | None:
@@ -451,18 +488,38 @@ class _Hooks:
             final_eval()
 
         trainer.final_eval = flagged_final_eval
-        report = self.report
-        if not self.webhook or not report.model_id:
+        if not self.webhook:
             return
         from ultralytics.utils.callbacks import platform
 
+        callbacks = trainer.callbacks
+        _swap(callbacks.get("on_fit_epoch_end", []), platform.on_fit_epoch_end,
+              partial(self._webhook_epoch_end, platform))
+        _swap(callbacks.get("on_model_save", []), platform.on_model_save,
+              partial(self._webhook_model_save, platform))
+        report = self.report
+        if not report.model_id:
+            return
         # The Platform callback reuses platform_model_id.txt only when resuming, so present
         # the run as a resume for that one call to bind events to report_to.model_id.
         record = ensure_dir(Path(trainer.save_dir)) / "platform_model_id.txt"
         record.write_text(report.model_id, encoding="utf-8")
-        chain = trainer.callbacks["on_pretrain_routine_start"]
-        if platform.on_pretrain_routine_start in chain:
-            chain[chain.index(platform.on_pretrain_routine_start)] = partial(_bound_start, platform)
+        _swap(callbacks.get("on_pretrain_routine_start", []), platform.on_pretrain_routine_start,
+              partial(_bound_start, platform))
+
+    def _webhook_epoch_end(self, platform, trainer) -> None:
+        if self._final_eval or report_due(trainer.epoch + 1, self.report.rest.metrics_every_epochs):
+            platform.on_fit_epoch_end(trainer)
+
+    def _webhook_model_save(self, platform, trainer) -> None:
+        epoch = trainer.epoch + 1
+        if epoch >= trainer.epochs or not report_due(epoch,
+                                                      self.report.rest.checkpoint_every_epochs):
+            return
+        ctx = getattr(trainer, "platform", None)
+        if ctx:
+            ctx["last_upload"] = 0.0  # the callback's own 15-minute limit would skip it
+        platform.on_model_save(trainer)
 
     def train_start(self, trainer) -> None:
         if self.rest:
@@ -478,6 +535,37 @@ class _Hooks:
         if (ctx or self.rest) and self.report.heartbeat_seconds > 0:
             self._beat = threading.Thread(target=self._heartbeat, args=(trainer,), daemon=True)
             self._beat.start()
+        if ctx:
+            threading.Thread(target=self._watch_cancellation, args=(trainer,), daemon=True).start()
+
+    def _watch_cancellation(self, trainer) -> None:
+        while not self._beat_stop.is_set():
+            if self.ctx.cancellation.wait(1.0):
+                self.mark_cancelled(trainer)
+                return
+
+    def mark_cancelled(self, trainer) -> None:
+        """On SIGTERM, PATCH the webhook model to cancelled before the final upload, which
+        can outlast the Pod's grace period; the callback itself never reports a cancel."""
+        with self._cancel_lock:
+            ctx = getattr(trainer, "platform", None) if trainer is not None else None
+            if (self._cancel_sent or not self.webhook or not ctx
+                    or not self.ctx.cancellation.requested):
+                return
+            self._cancel_sent = True
+            report = self.report
+            owner, project, model = report.owner, report.project, report.model
+            url_path = urllib.parse.urlsplit(str(ctx.get("model_url") or "")).path
+            parts = [p for p in url_path.split("/") if p]
+            if len(parts) >= 3:  # the server may have renamed the model, e.g. m -> m-2
+                owner, project, model = parts[-3:]
+            config = replace(report.rest or RestConfig(), timeout_seconds=10.0, max_attempts=2,
+                             max_retry_wait=2.0)
+            reporter = RestReporter(RestClient(report.base_url, report.token, config),
+                                    owner=owner, project=project, model=model,
+                                    model_id=str(ctx.get("model_id") or ""))
+            self._quietly("the cancellation", reporter.patch, "cancelled",
+                          metadata=self._metadata())
 
     def batch_end(self, trainer) -> None:
         if self.ctx.cancellation.requested and not trainer.stop:
@@ -493,14 +581,16 @@ class _Hooks:
         fitness = trainer.fitness
         events.progress(trainer.epoch + 1, trainer.epochs, per_epoch * (trainer.epochs - trainer.epoch - 1),
                         fitness=None if fitness is None or not math.isfinite(fitness) else round(fitness, 5))
-        if self.rest and self._last_epoch % self.rest.config.metrics_every_epochs == 0:
-            fields = self._results(trainer)
-            self._queue.submit(self._quietly, "metrics", self.rest.patch, "running", **fields)
+        if self.rest and report_due(self._last_epoch, self.rest.config.metrics_every_epochs):
+            item = train_result(self._last_epoch, fitness, trainer.metrics or {})
+            self._train_results.append(item)
+            self._queue.submit(self._quietly, "metrics", self.rest.patch, "running",
+                               train_results=list(self._train_results), **self._results(trainer))
 
     def model_save(self, trainer) -> None:
         every = self.rest.config.checkpoint_every_epochs if self.rest else 0
         epoch = trainer.epoch + 1
-        if not every or epoch % every or epoch >= trainer.epochs:
+        if not report_due(epoch, every) or epoch >= trainer.epochs:
             return
         if self._checkpoint and not self._checkpoint.done():
             logger.info("previous checkpoint upload still running; skipping epoch %d", epoch)
@@ -516,10 +606,11 @@ class _Hooks:
 
     def train_end(self, trainer) -> None:
         self.stop_heartbeat()
+        self.mark_cancelled(trainer)
         if getattr(trainer, "platform", None) or self.rest:
             events.stage("uploading")
 
-    def _rest_finish(self, trainer, summary: dict[str, Any]) -> str | None:
+    def _rest_finish(self, trainer) -> str | None:
         self._queue.shutdown(wait=True)
         (self.output / "weights" / "checkpoint-upload.pt").unlink(missing_ok=True)
         problems = []
@@ -531,8 +622,13 @@ class _Hooks:
                 logger.error("uploading %s failed: %s", weights.name, exc)
                 problems.append(f"uploading {weights.name} to the platform failed")
         status = "cancelled" if self.ctx.cancellation.requested else "completed"
+        fields = self._results(trainer)
+        if not self._train_results or self._train_results[-1]["epoch"] < fields["epochs"]:
+            item = train_result(fields["epochs"], getattr(trainer, "fitness", None),
+                                trainer.metrics or {})
+            self._train_results.append(item)
         try:
-            self.rest.patch(status, **self._results(trainer), train_results=summary)
+            self.rest.patch(status, train_results=list(self._train_results), **fields)
         except PlatformHTTPError as exc:
             logger.error("writing the results failed: %s", exc)
             problems.append("the platform did not accept the results")
@@ -542,8 +638,6 @@ class _Hooks:
         stopper = getattr(trainer, "stopper", None)
         best = trainer.best_fitness
         return {
-            "metrics": {k: float(v) for k, v in (trainer.metrics or {}).items()
-                        if isinstance(v, (int, float)) and math.isfinite(float(v))},
             "epochs": min(trainer.epoch + 1, trainer.epochs),
             "best_epoch": getattr(stopper, "best_epoch", None),
             "best_fitness": float(best) if best is not None and math.isfinite(float(best)) else None,
@@ -588,9 +682,11 @@ class _Hooks:
             cancelled = isinstance(exc, KeyboardInterrupt) or self.ctx.cancellation.requested
             error = exc if isinstance(exc, DistillRunError) else classify(exc)
             self._quietly("the failure", self.rest.patch, "cancelled" if cancelled else "failed",
-                          error=None if cancelled else f"{error.code}: {error.message}",
+                          error=None if cancelled else error.message,
+                          error_code=None if cancelled else error.code,
                           metadata=self._metadata())
             return
+        self.mark_cancelled(trainer)
         ctx = getattr(trainer, "platform", None) if trainer is not None else None
         if not ctx or not ctx.get("model_id"):
             return
@@ -601,6 +697,16 @@ class _Hooks:
         platform._send("training_failed", {"error": error.message[:2000], "code": error.code,
                                            "runId": ctx.get("run_id")},
                        project, name, ctx["model_id"], retry=3)
+
+    def cancelled_error(self, trainer, summary: dict[str, Any]) -> DistillRunError | None:
+        where = (f"at epoch {summary['epochs_completed']}; "
+                 f"weights so far are in {self.output / 'weights'}")
+        if self.ctx.cancellation.requested:
+            return CancelledError(f"cancelled {where}")
+        ctx = getattr(trainer, "platform", None)
+        if self.webhook and ctx and ctx.get("cancelled"):
+            return PlatformCancelledError(f"cancelled from the platform {where}")
+        return None
 
     def summary(self, trainer) -> dict[str, Any]:
         stopper = getattr(trainer, "stopper", None)

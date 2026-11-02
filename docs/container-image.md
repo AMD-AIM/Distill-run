@@ -164,9 +164,11 @@ docker run --rm --device /dev/kfd --device /dev/dri -v $PWD/coco8.zip:/tmp/coco8
 
 Each check prints `IMAGE_SMOKE <name> exit=<n> seconds=<s>`; the last line is
 `IMAGE_SMOKE result=PASS` (exit 0) or `IMAGE_SMOKE result=FAIL` (exit 1). Use
-`--device cpu` on a machine without an AMD GPU. The Ultralytics run downloads
-`Arial.ttf` from ultralytics.com and the YOLO run downloads `yolo26n` weights
-from GitHub releases.
+`--device cpu` on a machine without an AMD GPU. The YOLO run downloads `yolo26n`
+weights from GitHub releases. `Arial.ttf`, which Ultralytics would otherwise
+download from GitHub while checking a dataset, is baked into
+`/usr/local/share/distill-run/fonts` (`DISTILL_RUN_FONTS_DIR`, sha256-pinned at
+build time) and copied into Ultralytics' config dir before training.
 
 ## Licenses
 
