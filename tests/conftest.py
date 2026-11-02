@@ -29,6 +29,9 @@ def _isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("WORK_DIR", str(tmp_path / "work"))
     monkeypatch.setenv("HF_HOME", str(tmp_path / "hf"))
+    # Inside the image the default envs root holds real engine venvs, and the CLI
+    # would exec into one of them, replacing the pytest process.
+    monkeypatch.setenv("DISTILL_RUN_ENVS_ROOT", str(tmp_path / "no-engine-envs"))
 
 
 @pytest.fixture

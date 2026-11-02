@@ -37,6 +37,7 @@ from .engines import registry
 from .engines.base import Engine, RunResult
 from .errors import CancelledError, DistillRunError, ExitCode, UsageError, classify
 from .models import resolve_model_params
+from .redact import SecretFilter
 from .runtime_env import maybe_run_in_engine_environment
 from .signals import install_handlers
 
@@ -88,6 +89,7 @@ def configure_logging(level: str | None = None) -> None:
         handler = logging.StreamHandler(sys.stdout)
         handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
         handler._distill_run = True  # type: ignore[attr-defined]
+        handler.addFilter(SecretFilter())
         ours.handlers = [handler]
 
 

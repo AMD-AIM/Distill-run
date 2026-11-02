@@ -83,10 +83,19 @@ def coco_to_ndjson(root: Path, base_url: str, out: Path) -> Path:
     return out
 
 
+# The imports each engine performs at run time; doctor does not exercise them, and
+# ms-swift is installed --no-deps, so a missing dependency only shows up here.
+FRAMEWORK_IMPORTS = {
+    "swift": ("from swift.pipelines import sft_main", "from swift.arguments import SftArguments"),
+    "trl": ("from trl import DistillationConfig, DistillationTrainer",),
+    "easydistill": ("from easydistill.cli.main import _JOB_DISPATCH",),
+    "yolo": ("import cv2",),
+    "ultralytics": ("import cv2", "from ultralytics import YOLO", "import ultralytics_platform"),
+}
+
+
 def _torch_code(venv: str, device: str) -> str:
-    lines = ["import torch", "import distill_run.cli"]
-    if venv in ("yolo", "ultralytics"):
-        lines.append("import cv2")
+    lines = ["import torch", "import distill_run.cli", *FRAMEWORK_IMPORTS.get(venv, ())]
     lines += [
         "assert torch.version.hip, f'not a ROCm build: {torch.__version__}'",
         "ok = torch.cuda.is_available()",

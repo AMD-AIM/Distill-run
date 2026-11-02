@@ -111,6 +111,10 @@ def test_build_checks_uses_the_required_values(smoke, tmp_path):
 
     for name in ("torch:yolo", "torch:ultralytics"):
         assert "import cv2" in by_name[name].argv[-1]
+    assert "from swift.pipelines import sft_main" in by_name["torch:swift"].argv[-1]
+    assert "from trl import DistillationConfig" in by_name["torch:trl"].argv[-1]
+    assert "from easydistill.cli.main import" in by_name["torch:easydistill"].argv[-1]
+    assert "import ultralytics_platform" in by_name["torch:ultralytics"].argv[-1]
     for name in ("torch:core", "torch:swift"):
         assert "assert torch.cuda.is_available()" in by_name[name].argv[-1]
     for name in (f"torch:{venv}" for venv in ("core", *ENGINES)):

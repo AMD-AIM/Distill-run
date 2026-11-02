@@ -77,4 +77,11 @@ def maybe_run_in_engine_environment(engine: str, argv: Sequence[str]) -> int | N
     if swift.is_file():
         env.setdefault("DISTILL_RUN_SWIFT_EXECUTABLE", str(swift))
     logger.info("using isolated %s environment: %s", engine, python)
-    return subprocess.call([str(python), "-m", "distill_run", *argv], env=env)  # noqa: S603
+    command = [str(python), "-m", "distill_run", *argv]
+    if os.name != "posix":
+        return subprocess.call(command, env=env)  # noqa: S603
+    # Replace this process rather than wait on a child: SIGTERM from the pod (or the
+    # RC wrapper) must reach the worker, which owns the cancellation handlers.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve(command[0], command, env)  # noqa: S606
